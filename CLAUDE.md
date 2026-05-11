@@ -136,6 +136,55 @@ There are several `synology-*` npm packages. None covered SYNO.Core.Package, SYN
 
 The NAS only stores the SMB share config + quota. Backup *state* (last successful, in-progress, errors) is in macOS's `tmutil` on the Mac being backed up. The skill's `SKILL.md` tells Claude to shell out via Bash when running on that Mac; don't try to add an MCP tool for backup state — it would have to SSH to the Mac, which adds a whole separate auth surface we don't want.
 
+## v0.2 roadmap: real write flow
+
+`nas_package_install` / `_update` / `_uninstall` are stubbed in 0.1.x — they
+return a clear "use DSM UI" error instead of half-working. The DSM 7 install
+flow is multi-step async; we found this out by hitting error code 103 ("method
+does not exist") on a naive single-call `install` and digging into how
+`N4S4/synology-api` Python lib actually does it.
+
+The flow to port:
+
+1. **Catalog lookup**. `SYNO.Core.Package.Server.list?tab=update` for the
+   target id. Pull `link` (url), `md5` (checksum), `size` (filesize),
+   `version`, and `deppkgs`.
+2. **Start download**. `SYNO.Core.Package.Installation` method `install`
+   with `operation=install, type=0, blqinst=false, url, name, checksum,
+   filesize`. Returns `{ taskid, progress }`.
+3. **Poll download**. `SYNO.Core.Package.Installation` method `status`
+   with `task_id`. Repeat until `finished=true` or `has_fail=true`.
+   `progress` goes 0..1.
+4. **Check downloaded file**. `SYNO.Core.Package.Installation.Download`
+   method `check` with `task_id`. Returns `filename` (file_path).
+5. **Check install feasibility**. `SYNO.Core.Package.Installation` method
+   `check` with `id`, `install_type=""`, `install_on_cold_storage=false`,
+   `breakpkgs=None`, `blCheckDep=false`, `replacepkgs=None`. Returns
+   `volume_path` (where to install).
+6. **Apply**.
+   - Fresh install: `SYNO.Core.Package.Installation` method `install`
+     with `type=0, volume_path, path=file_path, check_codesign=true,
+     force=true, installrunpackage=true, extra_values={}`.
+   - In-place upgrade: `SYNO.Core.Package.Installation` method `upgrade`
+     with `task_id, type=0, check_codesign=false, force=false,
+     installrunpackage=true, extra_values={}`.
+
+For uninstall (single call, much simpler):
+- `SYNO.Core.Package.Uninstallation` method `uninstall` with `id`,
+  `dsm_apps=""`. Our v0.1.4 code passed `dsm_apps: "true"/"false"` which is
+  wrong — that field is a list of DSM apps to also uninstall, not a "keep
+  data" flag. Fix when wiring v0.2.
+
+References: `N4S4/synology-api` repo, `synology_api/core_package.py`,
+methods `download_package`, `get_dowload_package_status`,
+`check_installation_from_download`, `check_installation`,
+`install_package`, `upgrade_package`, `uninstall_package`, `easy_install`.
+Easy_install shows the full orchestration including dependency resolution.
+
+Audit log already records write attempts (with `ok: false, error` on the
+stub case), so when v0.2 ships the real flow the JSONL history retroactively
+explains every "DSM UI fallback" event.
+
 ## Deliberately deferred (don't pre-build)
 
 These are conscious omissions, not gaps. If a future request actually requires one, add it then.

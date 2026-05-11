@@ -57,7 +57,7 @@ function safeTool<A>(fn: (args: A) => Promise<unknown>) {
 
 export function createServer(cfg: Config, dsm: DsmClient): McpServer {
   const server = new McpServer(
-    { name: "synology-nas-mcp", version: "0.1.4" },
+    { name: "synology-nas-mcp", version: "0.1.5" },
     { instructions: SERVER_INSTRUCTIONS }
   );
 
@@ -137,7 +137,7 @@ export function createServer(cfg: Config, dsm: DsmClient): McpServer {
 
   server.tool(
     "nas_package_install",
-    "Install a package from the official Synology repo. Mutating: ask the user before calling. Refuses DSM/kernel.",
+    "[Not yet implemented in v0.1.x] Install a package. DSM 7's 6-step async install flow isn't wired up yet — calling this returns an error pointing to the DSM UI. Use Package Center directly until v0.2.",
     {
       name: z.string().describe("Package id to install"),
       version: z
@@ -150,7 +150,7 @@ export function createServer(cfg: Config, dsm: DsmClient): McpServer {
 
   server.tool(
     "nas_package_uninstall",
-    "Uninstall a package. `keep_data` defaults to true — matches DSM's safe-default keep-data prompt; pass false only if the user explicitly wants data wiped. Refuses DSM/kernel.",
+    "[Not yet implemented in v0.1.x] Uninstall a package. Calling this returns an error pointing to the DSM UI. Use Package Center directly until v0.2.",
     {
       name: z.string().describe("Package id to uninstall"),
       keep_data: z
@@ -165,7 +165,7 @@ export function createServer(cfg: Config, dsm: DsmClient): McpServer {
 
   server.tool(
     "nas_package_update",
-    "Update a single package to the latest version. Refuses DSM/kernel — those are out of scope. Verifies post-state version changed.",
+    "[Not yet implemented in v0.1.x] Update a single package. Calling this returns an error pointing to the DSM UI — apply via Package Center → Update tab. Will be wired in v0.2 when the multi-step DSM install flow is ported.",
     { name: z.string().describe("Package id to update") },
     safeTool((args) => nasPackageUpdate(cfg, dsm, args))
   );

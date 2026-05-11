@@ -108,6 +108,27 @@ export async function nasPackageInfo(
   };
 }
 
+// Write tools are intentionally stubbed in v0.1.x.
+//
+// DSM 7's package install/upgrade is a multi-step async flow (~6 API calls
+// with polling):
+//   1. Get catalog entry for url + md5 + filesize.
+//   2. SYNO.Core.Package.Installation.install (operation=install, type=0,
+//      url, name, checksum, filesize) → returns task_id.
+//   3. Poll SYNO.Core.Package.Installation.status until finished.
+//   4. SYNO.Core.Package.Installation.Download.check task_id → file_path.
+//   5. SYNO.Core.Package.Installation.check id, install_type → volume_path.
+//   6. SYNO.Core.Package.Installation.install (fresh) or .upgrade (in-place)
+//      with task_id, type=0, volume_path, file_path, force, installrunpackage.
+//
+// Reference: N4S4/synology-api Python lib `core_package.py` (easy_install,
+// upgrade_package, install_package). Worth porting in a focused session for
+// v0.2. Until then, surface the limitation clearly so Claude can guide the
+// user to the DSM UI fallback (which is the right answer for one-off
+// updates anyway).
+const NOT_YET_IMPLEMENTED =
+  "Not yet implemented in v0.1.x. DSM 7 requires a 6-step async download/check/install flow we haven't ported. Apply via DSM Package Center UI: Package Center → Update tab → click Update on the specific package, or for new installs use Package Center → search and install. The MCP read tools (list, check_updates, info) work; we'll wire the writes for v0.2.";
+
 interface InstallArgs {
   name: string;
   version?: string;
@@ -115,38 +136,17 @@ interface InstallArgs {
 
 export async function nasPackageInstall(
   cfg: Config,
-  dsm: DsmClient,
+  _dsm: DsmClient,
   args: InstallArgs
 ) {
   refuseIfProtected(args.name);
-  const before = await listOneState(dsm, args.name);
-  let after: any = null;
-  let ok = false;
-  let error: string | undefined;
-  try {
-    await dsm.call({
-      api: "SYNO.Core.Package.Installation",
-      method: "install",
-      version: 2,
-      post: true,
-      params: { name: args.name, version: args.version },
-    });
-    after = await listOneState(dsm, args.name);
-    ok = true;
-  } catch (err: any) {
-    error = String(err?.message ?? err);
-    throw err;
-  } finally {
-    await recordWrite(cfg, {
-      tool: "nas_package_install",
-      args: { ...args },
-      before,
-      after,
-      ok,
-      error,
-    });
-  }
-  return { before, after, verified: after?.version != null };
+  await recordWrite(cfg, {
+    tool: "nas_package_install",
+    args: { ...args },
+    ok: false,
+    error: NOT_YET_IMPLEMENTED,
+  });
+  throw new Error(NOT_YET_IMPLEMENTED);
 }
 
 interface UninstallArgs {
@@ -156,81 +156,37 @@ interface UninstallArgs {
 
 export async function nasPackageUninstall(
   cfg: Config,
-  dsm: DsmClient,
+  _dsm: DsmClient,
   args: UninstallArgs
 ) {
   refuseIfProtected(args.name);
-  const keep = args.keep_data ?? true;
-  const before = await listOneState(dsm, args.name);
-  let after: any = null;
-  let ok = false;
-  let error: string | undefined;
-  try {
-    await dsm.call({
-      api: "SYNO.Core.Package.Uninstallation",
-      method: "uninstall",
-      version: 1,
-      post: true,
-      params: { id: args.name, dsm_apps: keep ? "true" : "false" },
-    });
-    after = await listOneState(dsm, args.name);
-    ok = true;
-  } catch (err: any) {
-    error = String(err?.message ?? err);
-    throw err;
-  } finally {
-    await recordWrite(cfg, {
-      tool: "nas_package_uninstall",
-      args: { ...args, keep_data: keep },
-      before,
-      after,
-      ok,
-      error,
-    });
-  }
-  return { before, after, removed: after == null };
+  await recordWrite(cfg, {
+    tool: "nas_package_uninstall",
+    args: { ...args },
+    ok: false,
+    error: NOT_YET_IMPLEMENTED,
+  });
+  throw new Error(NOT_YET_IMPLEMENTED);
 }
 
 export async function nasPackageUpdate(
   cfg: Config,
-  dsm: DsmClient,
+  _dsm: DsmClient,
   args: { name: string }
 ) {
   refuseIfProtected(args.name);
-  const before = await listOneState(dsm, args.name);
-  let after: any = null;
-  let ok = false;
-  let error: string | undefined;
-  try {
-    await dsm.call({
-      api: "SYNO.Core.Package.Installation",
-      method: "install",
-      version: 2,
-      post: true,
-      params: { name: args.name },
-    });
-    after = await listOneState(dsm, args.name);
-    ok = true;
-  } catch (err: any) {
-    error = String(err?.message ?? err);
-    throw err;
-  } finally {
-    await recordWrite(cfg, {
-      tool: "nas_package_update",
-      args: { ...args },
-      before,
-      after,
-      ok,
-      error,
-    });
-  }
-  return {
-    before,
-    after,
-    verified: !!after && after.version !== before?.version,
-  };
+  await recordWrite(cfg, {
+    tool: "nas_package_update",
+    args: { ...args },
+    ok: false,
+    error: NOT_YET_IMPLEMENTED,
+  });
+  throw new Error(NOT_YET_IMPLEMENTED);
 }
 
+// Kept for v0.2 when writes are wired: convenience to capture before/after
+// state of a single package by id or display name.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function listOneState(dsm: DsmClient, name: string) {
   const all = await nasPackagesList(dsm);
   return (
