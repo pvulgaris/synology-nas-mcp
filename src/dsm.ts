@@ -117,6 +117,18 @@ export class DsmClient {
     if (this.sid) add("_sid", this.sid);
     for (const [k, v] of Object.entries(opts.params ?? {})) add(k, v);
 
+    // Log every call so Container Manager's log tab has the full DSM trace.
+    // Trim _sid + passwd so the log isn't a secret. Other params are fine —
+    // they're the actual call shape, useful for debugging mismatches.
+    const safeParams: Record<string, string> = {};
+    const src = opts.post ? body : url.searchParams;
+    src.forEach((v, k) => {
+      if (k === "_sid" || k === "passwd" || k === "otp_code") return;
+      safeParams[k] = v;
+    });
+    const verb = opts.post ? "POST" : "GET";
+    console.error(`[dsm] → ${verb} ${opts.api}.${opts.method}`, safeParams);
+
     const init: RequestInit = opts.post
       ? {
           method: "POST",
@@ -128,17 +140,25 @@ export class DsmClient {
     const json = (await res.json()) as DsmResponse<T>;
     if (!json.success) {
       const code = json.error?.code ?? -1;
-      const detail = json.error?.errors
-        ? ` — ${JSON.stringify(json.error.errors)}`
-        : "";
+      const errs = json.error?.errors;
+      // Log the whole raw error payload — most DSM failure modes only make
+      // sense when you can see the full response, not just the code.
+      console.error(
+        `[dsm] ✗ ${opts.api}.${opts.method} code=${code}`,
+        JSON.stringify(json.error ?? {})
+      );
+      const detail = errs ? ` — ${JSON.stringify(errs)}` : "";
       throw new DsmError(
         opts.api,
         opts.method,
         code,
-        json.error?.errors,
+        errs,
         `${opts.api}.${opts.method} failed (code ${code})${detail}`
       );
     }
+    // Success: log a one-liner so we know order/timing without dumping the
+    // full data (which can be huge for list responses).
+    console.error(`[dsm] ✓ ${opts.api}.${opts.method}`);
     return (json.data ?? ({} as T));
   }
 

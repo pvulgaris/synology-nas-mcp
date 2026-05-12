@@ -1,20 +1,27 @@
 /**
- * Package Center tools. Reads: list, check_updates, info. Writes: install,
- * uninstall, update — all real in v0.2+.
+ * Package Center tools. Reads: list, check_updates, info.
+ * Writes: install, uninstall, update — all single-call against DSM 7.
  *
- * Install/upgrade is a multi-step DSM API flow:
- *   1. Look up the catalog entry for the target id → url, md5, size.
- *   2. SYNO.Core.Package.Installation.install (operation=install) → task_id.
- *   3. Poll SYNO.Core.Package.Installation.status until finished.
- *   4. SYNO.Core.Package.Installation.Download.check task_id → filename.
- *   5a. (fresh install) SYNO.Core.Package.Installation.check id → volume_path,
- *       then SYNO.Core.Package.Installation.install with volume_path + filename.
- *   5b. (in-place upgrade) SYNO.Core.Package.Installation.upgrade with task_id.
- *   6. Verify post-state via SYNO.Core.Package.list.
+ * History note: an earlier (v0.2.0–0.2.5) iteration ported the multi-step
+ * download-and-install orchestration from the `N4S4/synology-api` Python lib
+ * (catalog lookup → start download → poll status → Download.check →
+ * Installation.check → Installation.install/upgrade). That kept hitting code
+ * 4501 from the final upgrade call. Found `aldarondo/claude-synology`, which
+ * does the whole thing as a *single* call:
  *
- * Uninstall is a single call: SYNO.Core.Package.Uninstallation.uninstall.
+ *   GET  SYNO.Core.Package.Installation v1 method=upgrade id=<pkg>
+ *   POST SYNO.Core.Package.Installation v1 method=install  pkgname=<pkg>
+ *        volume_path=<vol>
  *
- * Reference: N4S4/synology-api Python lib `core_package.py`.
+ * DSM does the download/install/upgrade internally when given a single
+ * command. The multi-step lib API is only needed when installing from a
+ * caller-supplied URL.
+ *
+ * APIs used:
+ *   SYNO.Core.Package          v2  — list installed
+ *   SYNO.Core.Package.Server   v2  — catalog
+ *   SYNO.Core.Package.Installation   v1  — install / upgrade
+ *   SYNO.Core.Package.Uninstallation v1  — uninstall
  */
 
 import type { Config } from "../config.js";
@@ -23,10 +30,8 @@ import { recordWrite } from "../audit.js";
 
 const HARD_REFUSE_NAMES = new Set(["DSM", "kernel"]);
 
-const DOWNLOAD_POLL_MS = 1500;
-const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
-const POSTOP_VERIFY_TIMEOUT_MS = 90_000; // 90s after install/upgrade/uninstall
-const POSTOP_POLL_MS = 2000;
+const POSTOP_VERIFY_TIMEOUT_MS = 5 * 60 * 1000; // installs/upgrades can take a couple minutes
+const POSTOP_POLL_MS = 3000;
 
 function refuseIfProtected(name: string) {
   if (HARD_REFUSE_NAMES.has(name)) {
@@ -86,8 +91,8 @@ export async function nasPackagesCheckUpdates(dsm: DsmClient) {
   for (const p of catalog?.packages ?? []) {
     if (HARD_REFUSE_NAMES.has(p.id)) continue;
     const installedVersion = installedVersionById.get(p.id);
-    if (!installedVersion) continue; // not installed on this NAS
-    if (installedVersion === p.version) continue; // already current
+    if (!installedVersion) continue;
+    if (installedVersion === p.version) continue;
     pending.push({
       id: p.id,
       name: p.name,
@@ -124,21 +129,17 @@ export async function nasPackageInfo(
   };
 }
 
-// ──────────── Multi-step write helpers ────────────
+// ──────────── Write helpers ────────────
 
 interface CatalogEntry {
   id: string;
   name: string;
   version: string;
-  link: string;
-  md5: string;
-  size: number;
-  deppkgs?: any;
-  beta?: boolean;
 }
 
-/** Find a package in the available-catalog by id. Searches the `all` tab so
- *  we can install packages that don't have pending updates too. */
+/** Read the catalog entry for a package id (or display name). Used only to
+ *  preflight: confirm the package is in the repo and capture the target
+ *  version for post-state verification. */
 async function findInCatalog(
   dsm: DsmClient,
   packageId: string
@@ -154,107 +155,16 @@ async function findInCatalog(
   );
   if (!pkg) {
     throw new Error(
-      `Package "${packageId}" not found in the Synology repo catalog for this DS. ` +
-        `For non-repo packages, install via Package Center → Manual Install with a .spk file.`
+      `Package "${packageId}" not found in the Synology repo catalog for this DS. For non-repo packages, install via Package Center → Manual Install with a .spk file.`
     );
   }
-  if (!pkg.link || !pkg.md5 || pkg.size == null) {
-    throw new Error(
-      `Catalog entry for "${packageId}" is missing download metadata (link/md5/size). ` +
-        `Apply via DSM Package Center UI instead.`
-    );
-  }
-  return {
-    id: pkg.id,
-    name: pkg.name,
-    version: pkg.version,
-    link: pkg.link,
-    md5: pkg.md5,
-    size: pkg.size,
-    deppkgs: pkg.deppkgs,
-    beta: pkg.beta,
-  };
+  return { id: pkg.id, name: pkg.name, version: pkg.version };
 }
 
-/** Start the download. Returns the task_id used to poll status. */
-async function startDownload(
-  dsm: DsmClient,
-  info: CatalogEntry
-): Promise<string> {
-  const result = await dsm.call<any>({
-    api: "SYNO.Core.Package.Installation",
-    method: "install",
-    version: 1,
-    post: true,
-    params: {
-      operation: "install",
-      type: 0,
-      blqinst: false,
-      url: info.link,
-      name: info.id,
-      checksum: info.md5,
-      filesize: info.size,
-    },
-  });
-  const taskid = result?.taskid;
-  if (!taskid) {
-    throw new Error(
-      `Download did not start for "${info.id}": ${JSON.stringify(result)}`
-    );
-  }
-  return taskid;
-}
-
-/** Poll the install task until DSM reports the download finished. */
-async function pollDownloadDone(dsm: DsmClient, taskId: string): Promise<void> {
-  const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const status = await dsm.call<any>({
-      api: "SYNO.Core.Package.Installation",
-      method: "status",
-      version: 1,
-      params: { task_id: taskId },
-    });
-    if (status?.has_fail) {
-      throw new Error(`DSM reports download failed: ${JSON.stringify(status)}`);
-    }
-    if (status?.finished) return;
-    await sleep(DOWNLOAD_POLL_MS);
-  }
-  throw new Error(
-    `Download did not finish within ${Math.round(DOWNLOAD_TIMEOUT_MS / 1000)}s`
-  );
-}
-
-/** Used only for fresh installs: ask DSM for the on-disk file path after the
- *  download finishes, so we can pass it as `path` to the install call. */
-async function getDownloadedFilename(
-  dsm: DsmClient,
-  taskId: string
-): Promise<string> {
-  const check = await dsm.call<any>({
-    api: "SYNO.Core.Package.Installation.Download",
-    method: "check",
-    version: 1,
-    params: { task_id: taskId },
-  });
-  const filename = check?.filename;
-  if (!filename) {
-    throw new Error(
-      `Download.check returned no filename: ${JSON.stringify(check)}`
-    );
-  }
-  return filename;
-}
-
-/** Ask DSM what volume the package should land on.
- *  - If Package Center has a default volume set, `volume_path` comes back
- *    populated.
- *  - If it's set to "Always ask me" (DSM default), `volume_path` is empty
- *    and the caller is expected to pick from `volume_list`. We pick the
- *    first volume with the most free space — usually the only one on a
- *    consumer DS like the DS224+ (one /volume1). */
-async function checkInstallFeasibility(
+/** Resolve a volume to install onto when Package Center's default-volume
+ *  setting is "Always ask me". Synology returns volume_path: "" in that case,
+ *  along with a volume_list; we pick the one with the most free space. */
+async function resolveInstallVolume(
   dsm: DsmClient,
   packageId: string
 ): Promise<string> {
@@ -263,112 +173,25 @@ async function checkInstallFeasibility(
     method: "check",
     version: 1,
     post: true,
-    params: {
-      id: packageId,
-      install_type: "",
-      install_on_cold_storage: false,
-      blCheckDep: false,
-    },
+    params: { id: packageId, install_type: "" },
   });
   const direct = result?.volume_path;
-  if (typeof direct === "string" && direct.length > 0) {
-    return direct;
-  }
-  const candidates = Array.isArray(result?.volume_list) ? result.volume_list : [];
-  if (candidates.length === 0) {
-    throw new Error(
-      `Install feasibility check returned no usable volume: ${JSON.stringify(result)}`
-    );
-  }
-  // Most-free-space wins. Falls through to first if size_free is missing.
-  const pick = candidates
+  if (typeof direct === "string" && direct.length > 0) return direct;
+  const list = Array.isArray(result?.volume_list) ? result.volume_list : [];
+  const pick = list
     .slice()
-    .sort((a: any, b: any) => {
-      const af = Number(a?.size_free ?? 0);
-      const bf = Number(b?.size_free ?? 0);
-      return bf - af;
-    })[0];
+    .sort(
+      (a: any, b: any) => Number(b?.size_free ?? 0) - Number(a?.size_free ?? 0)
+    )[0];
   const mount = pick?.mount_point;
   if (typeof mount !== "string" || mount.length === 0) {
     throw new Error(
-      `Install feasibility check: no mount_point on the chosen volume: ${JSON.stringify(pick)}`
+      `Could not resolve install volume: ${JSON.stringify(result)}`
     );
   }
   return mount;
 }
 
-/** Apply a fresh install (the package wasn't installed before). */
-async function applyInstall(
-  dsm: DsmClient,
-  volumePath: string,
-  filePath: string
-): Promise<void> {
-  await dsm.call({
-    api: "SYNO.Core.Package.Installation",
-    method: "install",
-    version: 1,
-    post: true,
-    params: {
-      type: 0,
-      volume_path: volumePath,
-      path: filePath,
-      check_codesign: true,
-      force: false,
-      installrunpackage: true,
-      extra_values: "{}",
-    },
-  });
-}
-
-/** Stop a running package before in-place upgrade. DSM 7.3 returns code 4501
- *  on `upgrade` if the package is currently running; stopping first avoids it.
- *  Best-effort — log and continue if the stop call fails (the upgrade attempt
- *  will surface the real reason). */
-async function stopPackage(dsm: DsmClient, packageId: string): Promise<void> {
-  try {
-    await dsm.call({
-      api: "SYNO.Core.Package.Control",
-      method: "stop",
-      version: 1,
-      post: true,
-      params: { id: packageId },
-    });
-  } catch (err: any) {
-    console.error(`[upgrade] could not stop ${packageId}:`, err?.message ?? err);
-  }
-}
-
-/** Apply an in-place upgrade (the package was already installed). The
- *  installrunpackage flag tells DSM to start the package back up after the
- *  upgrade completes.
- *
- *  volume_path: DSM 7.3 returns code 4501 from this call when the user's
- *  Package Center "default install volume" is set to "Always ask me"
- *  (the DSM default). Passing the package's current volume_path explicitly
- *  bypasses that prompt. We get it from Installation.check just before. */
-async function applyUpgrade(
-  dsm: DsmClient,
-  taskId: string,
-  volumePath: string
-): Promise<void> {
-  await dsm.call({
-    api: "SYNO.Core.Package.Installation",
-    method: "upgrade",
-    version: 1,
-    post: true,
-    params: {
-      task_id: taskId,
-      type: 0,
-      volume_path: volumePath,
-      check_codesign: false,
-      force: false,
-      installrunpackage: true,
-      extra_values: "{}",
-    },
-  });
-}
-
-/** Poll the installed-list until `predicate(state)` returns true, or timeout. */
 async function waitForState(
   dsm: DsmClient,
   packageId: string,
@@ -408,7 +231,6 @@ export async function nasPackageUpdate(
   let after: any = null;
   let ok = false;
   let error: string | undefined;
-  let taskId: string | undefined;
   let targetVersion: string | undefined;
 
   try {
@@ -419,16 +241,15 @@ export async function nasPackageUpdate(
       );
     }
     targetVersion = info.version;
-    taskId = await startDownload(dsm, info);
-    await pollDownloadDone(dsm, taskId);
-    // DSM may demand a volume_path on upgrade (4501 when "Always ask me" is
-    // the default policy). Resolve the current install volume first.
-    const volumePath = await checkInstallFeasibility(dsm, args.name);
-    // Belt-and-suspenders: stop the package before upgrading. Some DSM
-    // versions also error on .upgrade when the package is running.
-    // installrunpackage:true on applyUpgrade restarts it after.
-    await stopPackage(dsm, args.name);
-    await applyUpgrade(dsm, taskId, volumePath);
+
+    // Single-call upgrade. DSM handles the download + install internally.
+    await dsm.call({
+      api: "SYNO.Core.Package.Installation",
+      method: "upgrade",
+      version: 1,
+      params: { id: args.name },
+    });
+
     after = await waitForState(
       dsm,
       args.name,
@@ -436,7 +257,7 @@ export async function nasPackageUpdate(
     );
     ok = after?.version === targetVersion;
     if (!ok) {
-      error = `Post-state check: expected version ${targetVersion}, observed ${after?.version ?? "<not installed>"}`;
+      error = `Post-state check: expected version ${targetVersion}, observed ${after?.version ?? "<not installed>"}.`;
     }
   } catch (err: any) {
     error = String(err?.message ?? err);
@@ -444,7 +265,7 @@ export async function nasPackageUpdate(
   } finally {
     await recordWrite(cfg, {
       tool: "nas_package_update",
-      args: { ...args, task_id: taskId, target_version: targetVersion },
+      args: { ...args, target_version: targetVersion },
       before,
       after,
       ok,
@@ -471,31 +292,22 @@ export async function nasPackageInstall(
   let after: any = null;
   let ok = false;
   let error: string | undefined;
-  let taskId: string | undefined;
+  let volumePath: string | undefined;
 
   try {
-    const info = await findInCatalog(dsm, args.name);
+    await findInCatalog(dsm, args.name); // surfaces a clearer error if not in repo
+    volumePath = await resolveInstallVolume(dsm, args.name);
 
-    // Surface missing dependencies up front; don't auto-install transitively.
-    const deps = Array.isArray(info.deppkgs) ? info.deppkgs : [];
-    const missing: string[] = [];
-    for (const dep of deps) {
-      const depId = typeof dep === "string" ? dep : (dep?.pkg ?? dep?.id);
-      if (!depId) continue;
-      const state = await listOneState(dsm, depId);
-      if (!state) missing.push(depId);
-    }
-    if (missing.length > 0) {
-      throw new Error(
-        `Cannot install "${args.name}": missing dependencies (${missing.join(", ")}). Install dependencies via DSM Package Center first, or call nas_package_install for each.`
-      );
-    }
+    // Single-call install. `pkgname` (not `name` or `id`) per DSM's accepted
+    // schema for this method — confirmed against aldarondo/claude-synology.
+    await dsm.call({
+      api: "SYNO.Core.Package.Installation",
+      method: "install",
+      version: 1,
+      post: true,
+      params: { pkgname: args.name, volume_path: volumePath },
+    });
 
-    taskId = await startDownload(dsm, info);
-    await pollDownloadDone(dsm, taskId);
-    const filename = await getDownloadedFilename(dsm, taskId);
-    const volumePath = await checkInstallFeasibility(dsm, args.name);
-    await applyInstall(dsm, volumePath, filename);
     after = await waitForState(dsm, args.name, (s) => s != null);
     ok = after != null;
     if (!ok) {
@@ -507,7 +319,7 @@ export async function nasPackageInstall(
   } finally {
     await recordWrite(cfg, {
       tool: "nas_package_install",
-      args: { ...args, task_id: taskId },
+      args: { ...args, volume_path: volumePath },
       before,
       after,
       ok,
