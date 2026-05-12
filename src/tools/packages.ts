@@ -296,7 +296,27 @@ async function applyInstall(
   });
 }
 
-/** Apply an in-place upgrade (the package was already installed). */
+/** Stop a running package before in-place upgrade. DSM 7.3 returns code 4501
+ *  on `upgrade` if the package is currently running; stopping first avoids it.
+ *  Best-effort — log and continue if the stop call fails (the upgrade attempt
+ *  will surface the real reason). */
+async function stopPackage(dsm: DsmClient, packageId: string): Promise<void> {
+  try {
+    await dsm.call({
+      api: "SYNO.Core.Package.Control",
+      method: "stop",
+      version: 1,
+      post: true,
+      params: { id: packageId },
+    });
+  } catch (err: any) {
+    console.error(`[upgrade] could not stop ${packageId}:`, err?.message ?? err);
+  }
+}
+
+/** Apply an in-place upgrade (the package was already installed). The
+ *  installrunpackage flag tells DSM to start the package back up after the
+ *  upgrade completes. */
 async function applyUpgrade(dsm: DsmClient, taskId: string): Promise<void> {
   await dsm.call({
     api: "SYNO.Core.Package.Installation",
@@ -367,6 +387,9 @@ export async function nasPackageUpdate(
     targetVersion = info.version;
     taskId = await startDownload(dsm, info);
     await pollDownloadDone(dsm, taskId);
+    // DSM 7.3 errors with code 4501 on `upgrade` when the package is running.
+    // Stop it before the upgrade; installrunpackage:true restarts it after.
+    await stopPackage(dsm, args.name);
     await applyUpgrade(dsm, taskId);
     after = await waitForState(
       dsm,

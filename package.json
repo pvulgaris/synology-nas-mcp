@@ -1,6 +1,6 @@
 {
   "name": "synology-nas-mcp",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "MCP server for managing a Synology NAS (DSM 7) — packages, security audit, shares. Deploys as a container on the NAS itself; reachable from your Macs over Tailscale.",
   "type": "module",
   "license": "MIT",

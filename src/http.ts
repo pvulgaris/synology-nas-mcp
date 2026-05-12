@@ -71,7 +71,7 @@ export async function startHttpDaemon(
   // Health endpoint — bypasses auth so you can curl it from a tailnet host
   // without rotating the bearer token. Returns no NAS state.
   app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, server: "synology-nas-mcp", version: "0.2.2" });
+    res.json({ ok: true, server: "synology-nas-mcp", version: "0.2.3" });
   });
 
   // Auth + Origin middleware applied to /mcp.

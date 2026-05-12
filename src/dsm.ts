@@ -128,12 +128,15 @@ export class DsmClient {
     const json = (await res.json()) as DsmResponse<T>;
     if (!json.success) {
       const code = json.error?.code ?? -1;
+      const detail = json.error?.errors
+        ? ` — ${JSON.stringify(json.error.errors)}`
+        : "";
       throw new DsmError(
         opts.api,
         opts.method,
         code,
         json.error?.errors,
-        `${opts.api}.${opts.method} failed (code ${code})`
+        `${opts.api}.${opts.method} failed (code ${code})${detail}`
       );
     }
     return (json.data ?? ({} as T));
