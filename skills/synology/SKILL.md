@@ -29,8 +29,8 @@ The `mcp__synology__*` tools talk to a self-hosted MCP server running on the NAS
 | `nas_security_advisor_scan` | Security Advisor findings, grouped by severity |
 | `nas_users_list` | accounts, 2FA on/off, expired flag |
 | `nas_firewall_list` | rules, auto-block, DoS protection |
-| `nas_dsm_security_settings` | HTTPS, SSH, SMB, auto-update, password policy |
-| `nas_shares_list` | shares incl. Time-Machine flag + quota |
+| `nas_dsm_security_settings` | web hardening (CSRF/CSP/IP-check/session-timeout), SSH, SMB, auto-update, password policy |
+| `nas_shares_list` | shares incl. encryption, quota (mb used/total), recycle-bin, snapshot support |
 
 **Write tools (per-call user confirmation required, see Write flow below):**
 
@@ -74,6 +74,10 @@ First-time-only gotcha: if Package Center API calls return weird errors on a fre
 - Kernel-flagged packages — same reason.
 - Firewall rule edits, 2FA enforcement changes, SMB protocol toggles — not implemented as writes. Surface as findings with the DSM UI path to fix.
 
+**Known read-tool gaps** (covered by Security Advisor findings; fix path is HITL HAR capture):
+- HTTPS-enforce + min-TLS toggle — `SYNO.Core.Web.DSM` requires JSON-format requests our client doesn't speak.
+- `SYNO.Core.Security.DoS.get` — returns 114 / 101 across versions; needs different params or a different API name.
+
 ## Protected packages (local config)
 
 a local config file has a `protect:` list. Never offer those for uninstall, even if they look dormant. Read the file at the start of any cleanup workflow.
@@ -82,7 +86,7 @@ a local config file has a `protect:` list. Never offer those for uninstall, even
 
 The NAS knows the *share configuration*. The actual *backup state* (last successful, in-progress, errors) lives in `tmutil` on the Mac being backed up. When the user asks about Time Machine, do both:
 
-- NAS side: `nas_shares_list` → locate the Time Machine share → report quota, % full, encryption, `enable_time_machine` flag.
+- NAS side: `nas_shares_list` → locate the Time Machine share by name (DSM 7's share API doesn't expose an explicit TM flag) → report `quota_mb`, `quota_used_mb`, `encryption`.
 - Mac side (if running locally on the Mac being backed up): shell out via Bash to
   - `tmutil destinationinfo` (confirms which destination is configured)
   - `tmutil status` (in-progress, errors)

@@ -82,6 +82,9 @@ export async function nasSecurityAdvisorScan(dsm: DsmClient) {
   return { findings: grouped };
 }
 
+// DSM 7 returns additional[] fields flat on each user object (not nested).
+// `expired` is a string: "normal" or "now"; pass through and let the consumer
+// interpret rather than guessing at boolean semantics.
 export async function nasUsersList(dsm: DsmClient) {
   const data = await dsm.call({
     api: "SYNO.Core.User",
@@ -100,15 +103,14 @@ export async function nasUsersList(dsm: DsmClient) {
   return {
     users: (data?.users ?? []).map((u: any) => ({
       name: u.name,
-      uid: u.uid,
-      description: u.additional?.description,
-      email: u.additional?.email,
-      expired: u.additional?.expired,
-      otp_enabled: u.additional?.["2fa_status"],
-      cannot_change_password: u.additional?.cannot_chg_passwd,
-      password_never_expire: u.additional?.passwd_never_expire,
-      password_last_change: u.additional?.password_last_change,
-      groups: u.additional?.groups,
+      description: u.description,
+      email: u.email,
+      expired: u.expired,
+      otp_enabled: u["2fa_status"],
+      cannot_change_password: u.cannot_chg_passwd,
+      password_never_expire: u.passwd_never_expire,
+      password_last_change: u.password_last_change,
+      groups: u.groups,
     })),
   };
 }
@@ -150,8 +152,13 @@ export async function nasFirewallList(dsm: DsmClient) {
   };
 }
 
+// `SYNO.Core.Security.DSM` v4 returns CSRF / CSP / session-timeout fields but
+// NOT the HTTPS-enforce or min-TLS toggles — those live on a different API
+// (SYNO.Core.Web.DSM, SYNO.Core.Service.PortForwarding, or similar) that
+// requires JSON request format which our DsmClient doesn't support yet. Skip
+// for now; covered separately in the open Phase 4 list.
 export async function nasDsmSecuritySettings(dsm: DsmClient) {
-  const [https, terminal, smb, autoUpdate, passwd] = await Promise.all([
+  const [security, terminal, smb, autoUpdate, passwd] = await Promise.all([
     dsm.call({ api: "SYNO.Core.Security.DSM", method: "get", version: 4 }).catch(() => null),
     dsm.call({ api: "SYNO.Core.Terminal", method: "get", version: 3 }).catch(() => null),
     dsm.call({ api: "SYNO.Core.FileServ.SMB", method: "get", version: 3 }).catch(() => null),
@@ -159,18 +166,28 @@ export async function nasDsmSecuritySettings(dsm: DsmClient) {
     dsm.call({ api: "SYNO.Core.User.PasswordPolicy", method: "get", version: 1 }).catch(() => null),
   ]);
   return {
-    https_only: https?.enable_https_redirect ?? null,
-    https_min_tls: https?.min_tls,
+    web_hardening: {
+      csrf_protection: security?.enable_csrf_protection ?? null,
+      csp_header: security?.csp_header_option ?? null,
+      ip_check: security?.skip_ip_checking === false ? true : security?.skip_ip_checking === true ? false : null,
+      session_timeout_min: security?.timeout ?? null,
+    },
     ssh_enabled: terminal?.enable_ssh ?? null,
     ssh_port: terminal?.ssh_port,
     telnet_enabled: terminal?.enable_telnet ?? null,
     smb: {
-      min_version: smb?.min_protocol,
-      max_version: smb?.max_protocol,
-      encryption: smb?.enable_encryption,
-      enable_smb1: smb?.enable_smb1,
+      enabled: smb?.enable_samba ?? null,
+      min_protocol: smb?.smb_min_protocol ?? null,
+      max_protocol: smb?.smb_max_protocol ?? null,
+      encrypt_transport: smb?.smb_encrypt_transport ?? null,
+      enable_smb1: typeof smb?.smb_min_protocol === "number" ? smb.smb_min_protocol <= 1 : null,
+      workgroup: smb?.workgroup,
     },
-    auto_update_dsm: autoUpdate?.auto_update_type ?? null,
+    auto_update: {
+      type: autoUpdate?.autoupdate_type ?? null,
+      schedule: autoUpdate?.schedule,
+      smart_nano: autoUpdate?.smart_nano_enabled,
+    },
     password_policy: passwd,
   };
 }
