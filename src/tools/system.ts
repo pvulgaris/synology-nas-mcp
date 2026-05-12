@@ -4,6 +4,17 @@
 
 import type { DsmClient } from "../dsm.js";
 
+// DSM returns up_time as a duration string ("HH:MM:SS" under 100h, or
+// "N days HH:MM:SS" beyond). Parse to seconds so consumers can do math
+// without depending on string parsing.
+function parseUpTime(s: unknown): number | null {
+  if (typeof s !== "string") return null;
+  const m = s.match(/^(?:(\d+)\s*days?\s+)?(\d+):(\d+):(\d+)$/);
+  if (!m) return null;
+  const [, days = "0", hours, minutes, seconds] = m;
+  return Number(days) * 86400 + Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
+}
+
 export async function nasStatus(dsm: DsmClient) {
   const [info, util] = await Promise.all([
     dsm.call({ api: "SYNO.Core.System", method: "info", version: 3 }),
@@ -17,7 +28,8 @@ export async function nasStatus(dsm: DsmClient) {
     model: info?.model,
     serial: info?.serial,
     dsm_version: info?.firmware_ver,
-    uptime_seconds: info?.up_time,
+    uptime: info?.up_time,
+    uptime_seconds: parseUpTime(info?.up_time),
     temperature_c: info?.temperature,
     cpu_load: util?.cpu,
     memory: util?.memory,

@@ -12,7 +12,7 @@ The `mcp__synology__*` tools talk to a self-hosted MCP server running on the NAS
 - **Status + storage**: "is the NAS okay?", "drive health", "RAID state".
 - **Packages**: list installed, check for updates, get info, install, update, uninstall.
 - **Package research**: "what's a good package for X?", "should I install Y?" — compose with WebSearch + `nas_packages_list` (to avoid recommending what's already there).
-- **Security audit**: "audit security", "is my NAS configured safely?" — compose Security Advisor scan + users + firewall + DSM settings + shares + storage.
+- **Security audit**: "audit security", "is my NAS configured safely?" — compose Security Advisor scan + users + firewall + DSM settings + shares + storage + external access + notifications + certificates + data protection.
 - **Time Machine inspection**: NAS-side share config + quota. For Mac-side backup *state*, see below.
 
 ## Tool inventory
@@ -29,8 +29,12 @@ The `mcp__synology__*` tools talk to a self-hosted MCP server running on the NAS
 | `nas_security_advisor_scan` | Security Advisor findings, grouped by severity |
 | `nas_users_list` | accounts, 2FA on/off, expired flag |
 | `nas_firewall_list` | rules, auto-block, per-adapter DoS protection |
-| `nas_dsm_security_settings` | web hardening (HTTPS-redirect/HSTS/CSRF/CSP/IP-check/session-timeout), TLS profile per service, SSH, SMB, auto-update, password policy |
+| `nas_dsm_security_settings` | web hardening (HTTPS-redirect/HSTS/CSRF/CSP/IP-check/session-timeout), TLS profile per service, SSH, SMB, NFS, auto-update, password policy, Active Insight |
 | `nas_shares_list` | shares incl. encryption, quota (mb used/total), recycle-bin, snapshot support |
+| `nas_external_access` | QuickConnect, DDNS, App Portal HTTPS-per-app, reverse-proxy rules, port forwarding |
+| `nas_notifications` | SMTP mail config — server, ssl, verify-cert, sender, recipient count |
+| `nas_certificates` | Cert inventory with `days_until_expiry`, services, self-signed flag |
+| `nas_data_protection` | Hyper Backup tasks (with encryption flag) + Snapshot Replication state; both report `installed: false` if package missing |
 
 **Write tools (per-call user confirmation required, see Write flow below):**
 

@@ -29,6 +29,10 @@ import {
   nasDsmSecuritySettings,
 } from "./tools/security.js";
 import { nasSharesList } from "./tools/shares.js";
+import { nasExternalAccess } from "./tools/external.js";
+import { nasNotifications } from "./tools/notifications.js";
+import { nasCertificates } from "./tools/certificates.js";
+import { nasDataProtection } from "./tools/data_protection.js";
 
 function jsonContent(data: unknown) {
   return {
@@ -122,16 +126,44 @@ export function createServer(cfg: Config, dsm: DsmClient): McpServer {
 
   server.tool(
     "nas_dsm_security_settings",
-    "HTTPS-only state, TLS minimum, SSH on/off + port, SMB min/max protocol + encryption, DSM auto-update mode, password policy. Use for the 'is my NAS configured safely?' question.",
+    "DSM hardening posture: web (HTTPS-redirect, HSTS, ports, CSRF/CSP, session timeout), per-service TLS profile, SSH/Telnet on-off, SMB protocol min/max + encryption, NFS on-off, DSM auto-update mode, password policy, Active Insight telemetry toggle. Use for the 'is my NAS configured safely?' question.",
     {},
     safeTool(() => nasDsmSecuritySettings(dsm))
   );
 
   server.tool(
     "nas_shares_list",
-    "Shared folders incl. Time-Machine flag, encryption, quota MB, snapshot support. Note: Time-Machine *backup state* (last successful, in-progress) lives in `tmutil` on the Mac being backed up, not here.",
+    "Shared folders with encryption, quota (used/total MB), recycle-bin, snapshot support, BTRFS COW flag. DSM 7's share API does not expose an explicit Time Machine flag — identify TM shares by name. Time-Machine *backup state* (last successful, in-progress) lives in `tmutil` on the Mac being backed up, not here.",
     {},
     safeTool(() => nasSharesList(dsm))
+  );
+
+  server.tool(
+    "nas_external_access",
+    "What's reachable from outside the LAN: QuickConnect (master toggle + relay flag + alias), DDNS records, Application Portal apps (per-app HTTPS-redirect), Reverse Proxy entries, UPnP-driven port-forwarding rules. Empty everywhere = NAS not internet-facing.",
+    {},
+    safeTool(() => nasExternalAccess(dsm))
+  );
+
+  server.tool(
+    "nas_notifications",
+    "Notification posture: SMTP mail config (server, port, SSL, verify-cert, sender, recipient count). Empty recipient list = SMTP wired but no human hears alerts.",
+    {},
+    safeTool(() => nasNotifications(dsm))
+  );
+
+  server.tool(
+    "nas_certificates",
+    "DSM certificate inventory with derived `days_until_expiry` per cert. Flag any cert with days_until_expiry < 30.",
+    {},
+    safeTool(() => nasCertificates(dsm))
+  );
+
+  server.tool(
+    "nas_data_protection",
+    "Backup + snapshot posture: Hyper Backup tasks (destination, encryption flag, last status) + Snapshot Replication state. Reports `installed: false` per service if the corresponding package isn't installed — that itself is a finding for ransomware mitigation.",
+    {},
+    safeTool(() => nasDataProtection(dsm))
   );
 
   // ── Write tools — client surfaces to user; server logs every call ─────────

@@ -10,22 +10,37 @@
  */
 import { loadConfig } from "../config.js";
 import { DsmClient } from "../dsm.js";
-import { nasStorageHealth } from "../tools/system.js";
+import { nasStatus, nasStorageHealth } from "../tools/system.js";
 import { nasSharesList } from "../tools/shares.js";
+import {
+  nasPackagesList,
+  nasPackagesCheckUpdates,
+} from "../tools/packages.js";
 import {
   nasUsersList,
   nasFirewallList,
   nasDsmSecuritySettings,
   nasSecurityAdvisorScan,
 } from "../tools/security.js";
+import { nasExternalAccess } from "../tools/external.js";
+import { nasNotifications } from "../tools/notifications.js";
+import { nasCertificates } from "../tools/certificates.js";
+import { nasDataProtection } from "../tools/data_protection.js";
 
 const SUITE: Record<string, (dsm: DsmClient) => Promise<unknown>> = {
+  nas_status: nasStatus,
   nas_storage_health: nasStorageHealth,
   nas_shares_list: nasSharesList,
+  nas_packages_list: nasPackagesList,
+  nas_packages_check_updates: nasPackagesCheckUpdates,
   nas_users_list: nasUsersList,
   nas_firewall_list: nasFirewallList,
   nas_dsm_security_settings: nasDsmSecuritySettings,
   nas_security_advisor_scan: nasSecurityAdvisorScan,
+  nas_external_access: nasExternalAccess,
+  nas_notifications: nasNotifications,
+  nas_certificates: nasCertificates,
+  nas_data_protection: nasDataProtection,
 };
 
 async function main() {

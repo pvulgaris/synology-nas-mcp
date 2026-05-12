@@ -179,14 +179,16 @@ export async function nasFirewallList(dsm: DsmClient) {
 // request itself is form-encoded like everything else. (Working clients
 // confirmed: synaudit, NielsKrijnen, N4S4, synology-community/go-synology.)
 export async function nasDsmSecuritySettings(dsm: DsmClient) {
-  const [security, web, tlsProfile, terminal, smb, autoUpdate, passwd] = await Promise.all([
+  const [security, web, tlsProfile, terminal, smb, nfs, autoUpdate, passwd, activeInsight] = await Promise.all([
     dsm.call({ api: "SYNO.Core.Security.DSM", method: "get", version: 4 }).catch(() => null),
     dsm.call({ api: "SYNO.Core.Web.DSM", method: "get", version: 2 }).catch(() => null),
     dsm.call({ api: "SYNO.Core.Web.Security.TLSProfile", method: "get", version: 1 }).catch(() => null),
     dsm.call({ api: "SYNO.Core.Terminal", method: "get", version: 3 }).catch(() => null),
     dsm.call({ api: "SYNO.Core.FileServ.SMB", method: "get", version: 3 }).catch(() => null),
+    dsm.call({ api: "SYNO.Core.FileServ.NFS", method: "get", version: 1 }).catch(() => null),
     dsm.call({ api: "SYNO.Core.Upgrade.Setting", method: "get", version: 3 }).catch(() => null),
     dsm.call({ api: "SYNO.Core.User.PasswordPolicy", method: "get", version: 1 }).catch(() => null),
+    dsm.call({ api: "SYNO.ActiveInsight.Setting", method: "get", version: 1 }).catch(() => null),
   ]);
   const tlsServices = (tlsProfile?.services ?? {}) as Record<string, any>;
   return {
@@ -222,11 +224,19 @@ export async function nasDsmSecuritySettings(dsm: DsmClient) {
       enable_smb1: typeof smb?.smb_min_protocol === "number" ? smb.smb_min_protocol <= 1 : null,
       workgroup: smb?.workgroup,
     },
+    nfs: {
+      enabled: nfs?.enable_nfs ?? null,
+      enabled_v4: nfs?.enable_nfs_v4 ?? null,
+      unix_pri: nfs?.unix_pri_enable ?? null,
+    },
     auto_update: {
       type: autoUpdate?.autoupdate_type ?? null,
       schedule: autoUpdate?.schedule,
       smart_nano: autoUpdate?.smart_nano_enabled,
     },
     password_policy: passwd,
+    active_insight: {
+      monitoring_service: activeInsight?.monitoring_service ?? null,
+    },
   };
 }
