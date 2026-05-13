@@ -44,7 +44,7 @@ docker build --platform linux/amd64 \
 docker save synology-nas-mcp:<ver> synology-nas-mcp:latest \
   -o ~/Downloads/synology-nas-mcp-<ver>.tar
 
-source dev/source-creds.sh   # once per shell; cached 4h
+source dev/source-creds.sh   # once per shell; keychain-cached, no TTL
 npm run deploy                # ~30s: upload+import+stop+build+start+/health-verify
 ```
 
@@ -119,7 +119,7 @@ It returns the entire catalog of packages installable on this DS — 105+ items,
 
 ### DSM Web API is reverse-engineered, not specced
 
-`SYNO.*` is not a public, versioned spec. Synology publishes a partial guide (mainly Auth + FileStation); the rest is reverse-engineered from DSM's own JS clients. When adding a new tool, **inspect DSM's UI network tab** for the exact `api/method/version/params` the official client sends, then mirror. Don't trust third-party docs alone — see the `N4S4`-shape upgrade bug we shipped in v0.2.7–0.2.10 before reverse-engineering the real flow from a HAR.
+`SYNO.*` is not a public, versioned spec. Synology publishes a partial guide (mainly Auth + FileStation); the rest is reverse-engineered from DSM's own JS clients. When adding a new tool, **inspect DSM's UI network tab** for the exact `api/method/version/params` the official client sends, then mirror. Don't trust third-party docs alone — widely-cited community references can lag current DSM behavior. We shipped an upgrade bug in v0.2.7–0.2.10 by following one before reverse-engineering the real flow from a HAR.
 
 ### Hard refusals live in `tools/packages.ts`, not `server.ts`
 
