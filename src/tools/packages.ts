@@ -44,6 +44,80 @@ import type { Config } from "../config.js";
 import type { DsmClient } from "../dsm.js";
 import { withAudit } from "../audit.js";
 
+// DSM response shapes used by the install/uninstall/update flows. None are
+// documented — observed from HAR captures and reverse-engineered. Fields are
+// optional because DSM omits keys when they don't apply (e.g. Download.check
+// has no `filename` until the download is staged).
+
+interface TaskidResp {
+  taskid?: string;
+}
+
+interface InstallCheckResp {
+  volume_path?: string;
+}
+
+interface InstallStatusResp {
+  success?: boolean;
+  status?: string;
+  progress?: number;
+  finished?: boolean;
+}
+
+interface DownloadCheckResp {
+  filename?: string;
+}
+
+interface QueueResp {
+  broken_pkgs?: unknown[];
+  conflicted_pkgs?: unknown[];
+  non_exist_pkgs?: unknown[];
+  paused_pkgs?: unknown[];
+}
+
+interface ApplyUpgradeResp {
+  worker_message?: unknown[];
+}
+
+interface InstalledPackage {
+  id: string;
+  name: string;
+  version: string;
+  additional?: {
+    description?: string;
+    status?: string;
+    beta?: boolean;
+    install_type?: string;
+    startable?: boolean;
+  };
+}
+
+interface CatalogPackage {
+  id: string;
+  name: string;
+  version: string;
+  link?: string;
+  md5?: string;
+  size?: number | string;
+  source?: string;
+  beta?: boolean;
+  install_type?: string;
+  install_on_cold_storage?: boolean;
+  publisher?: string;
+  description?: string;
+  changelog?: string;
+  depend_packages?: unknown;
+  install_dep_packages?: unknown;
+}
+
+interface PackageListResp {
+  packages?: InstalledPackage[];
+}
+
+interface CatalogListResp {
+  packages?: CatalogPackage[];
+}
+
 const HARD_REFUSE_NAMES = new Set(["DSM", "kernel"]);
 
 const DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000; // 15 min — big packages can be slow
@@ -70,7 +144,7 @@ function sleep(ms: number): Promise<void> {
 // derived from `additional.install_type === "system"` — those packages are
 // DSM-bundled and can't be uninstalled via Package Center.
 export async function nasPackagesList(dsm: DsmClient) {
-  const data = await dsm.call({
+  const data = await dsm.call<PackageListResp>({
     api: "SYNO.Core.Package",
     method: "list",
     version: 2,
@@ -79,7 +153,7 @@ export async function nasPackagesList(dsm: DsmClient) {
     },
   });
   return {
-    packages: (data?.packages ?? []).map((p: any) => ({
+    packages: (data?.packages ?? []).map((p) => ({
       id: p.id,
       name: p.name,
       version: p.version,
@@ -97,12 +171,12 @@ export async function nasPackagesList(dsm: DsmClient) {
 
 export async function nasPackagesCheckUpdates(dsm: DsmClient) {
   const [installed, catalog] = await Promise.all([
-    dsm.call<any>({
+    dsm.call<PackageListResp>({
       api: "SYNO.Core.Package",
       method: "list",
       version: 2,
     }),
-    dsm.call<any>({
+    dsm.call<CatalogListResp>({
       api: "SYNO.Core.Package.Server",
       method: "list",
       version: 2,
@@ -140,14 +214,14 @@ export async function nasPackageInfo(
   dsm: DsmClient,
   args: { name: string }
 ) {
-  const data = await dsm.call<any>({
+  const data = await dsm.call<CatalogListResp>({
     api: "SYNO.Core.Package.Server",
     method: "list",
     version: 2,
     params: { tab: "all" },
   });
   const pkg = (data?.packages ?? []).find(
-    (p: any) => p.id === args.name || p.name === args.name
+    (p) => p.id === args.name || p.name === args.name
   );
   if (!pkg) {
     throw new Error(
@@ -196,14 +270,14 @@ async function findInCatalog(
   dsm: DsmClient,
   packageId: string
 ): Promise<CatalogEntry> {
-  const data = await dsm.call<any>({
+  const data = await dsm.call<CatalogListResp>({
     api: "SYNO.Core.Package.Server",
     method: "list",
     version: 2,
     params: { tab: "all" },
   });
   const pkg = (data?.packages ?? []).find(
-    (p: any) => p.id === packageId || p.name === packageId
+    (p) => p.id === packageId || p.name === packageId
   );
   if (!pkg) {
     throw new Error(
@@ -229,11 +303,18 @@ async function findInCatalog(
   };
 }
 
+async function listOneState(dsm: DsmClient, name: string) {
+  const all = await nasPackagesList(dsm);
+  return all.packages.find((p) => p.id === name || p.name === name) ?? null;
+}
+
+type PackageState = Awaited<ReturnType<typeof listOneState>>;
+
 async function waitForState(
   dsm: DsmClient,
   packageId: string,
-  predicate: (state: any | null) => boolean
-): Promise<any | null> {
+  predicate: (state: PackageState) => boolean
+): Promise<PackageState> {
   const deadline = Date.now() + POSTOP_VERIFY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const state = await listOneState(dsm, packageId);
@@ -241,13 +322,6 @@ async function waitForState(
     await sleep(POSTOP_POLL_MS);
   }
   return await listOneState(dsm, packageId);
-}
-
-async function listOneState(dsm: DsmClient, name: string) {
-  const all = await nasPackagesList(dsm);
-  return (
-    all.packages.find((p: any) => p.id === name || p.name === name) ?? null
-  );
 }
 
 // ──────────── Write tools ────────────
@@ -278,7 +352,7 @@ async function getInstallQueue(
   version: string,
   beta: boolean
 ): Promise<void> {
-  const res = await dsm.call<any>({
+  const res = await dsm.call<QueueResp>({
     api: "SYNO.Core.Package.Installation",
     method: "get_queue",
     version: 1,
@@ -290,7 +364,7 @@ async function getInstallQueue(
     },
   });
   for (const key of ["broken_pkgs", "conflicted_pkgs", "non_exist_pkgs", "paused_pkgs"] as const) {
-    const arr = (res as any)?.[key];
+    const arr = res?.[key];
     if (Array.isArray(arr) && arr.length > 0) {
       throw new Error(
         `Cannot upgrade ${packageId}: ${key.replace("_pkgs", "")} = ${JSON.stringify(arr)}`
@@ -307,7 +381,7 @@ async function installationCheck(
   catalog: CatalogEntry,
   isUpgrade: boolean
 ): Promise<{ volumePath: string }> {
-  const res = await dsm.call<any>({
+  const res = await dsm.call<InstallCheckResp>({
     api: "SYNO.Core.Package.Installation",
     method: "check",
     version: 2,
@@ -327,8 +401,7 @@ async function installationCheck(
       blCheckDep: false,
     },
   });
-  const vp = (res as any)?.volume_path;
-  return { volumePath: typeof vp === "string" ? vp : "" };
+  return { volumePath: typeof res?.volume_path === "string" ? res.volume_path : "" };
 }
 
 /** Start the .spk download (upgrade) or fresh install. Both flows hit
@@ -364,20 +437,19 @@ async function startInstallation(
   if (mode === "install" && volumePath) {
     params.volume_path = JSON.stringify(volumePath);
   }
-  const res = await dsm.call<any>({
+  const res = await dsm.call<TaskidResp>({
     api: "SYNO.Core.Package.Installation",
     method: mode === "upgrade" ? "upgrade" : "install",
     version: 1,
     post: true,
     params,
   });
-  const taskId = (res as any)?.taskid;
-  if (typeof taskId !== "string" || taskId.length === 0) {
+  if (typeof res?.taskid !== "string" || res.taskid.length === 0) {
     throw new Error(
       `Installation.${mode} did not return a taskid; got: ${JSON.stringify(res)}`
     );
   }
-  return taskId;
+  return res.taskid;
 }
 
 /** Poll Installation.status until `finished:true`, then resolve the staged
@@ -390,38 +462,37 @@ async function waitForDownloadAndGetPath(
   const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS;
   let lastStatus = "";
   while (Date.now() < deadline) {
-    const s = await dsm.call<any>({
+    const s = await dsm.call<InstallStatusResp>({
       api: "SYNO.Core.Package.Installation",
       method: "status",
       version: 1,
       post: true,
       params: { task_id: taskId },
     });
-    if ((s as any)?.success === false) {
+    if (s?.success === false) {
       throw new Error(`Download failed: ${JSON.stringify(s)}`);
     }
-    const status = String((s as any)?.status ?? "");
+    const status = String(s?.status ?? "");
     if (status !== lastStatus) {
       console.error(
-        `[packages] download ${taskId} status=${status} finished=${(s as any)?.finished}`
+        `[packages] download ${taskId} status=${status} finished=${s?.finished}`
       );
       lastStatus = status;
     }
-    if ((s as any)?.finished === true) {
-      const dl = await dsm.call<any>({
+    if (s?.finished === true) {
+      const dl = await dsm.call<DownloadCheckResp>({
         api: "SYNO.Core.Package.Installation.Download",
         method: "check",
         version: 1,
         post: true,
         params: { taskid: taskId },
       });
-      const path = (dl as any)?.filename;
-      if (typeof path !== "string" || path.length === 0) {
+      if (typeof dl?.filename !== "string" || dl.filename.length === 0) {
         throw new Error(
           `Download finished but Download.check returned no filename: ${JSON.stringify(dl)}`
         );
       }
-      return path;
+      return dl.filename;
     }
     await sleep(DOWNLOAD_POLL_MS);
   }
@@ -453,7 +524,7 @@ async function applyDownloadedUpgrade(
       replacepkgs: "null",
     },
   });
-  const res = await dsm.call<any>({
+  const res = await dsm.call<ApplyUpgradeResp>({
     api: "SYNO.Core.Package.Installation",
     method: "upgrade",
     version: 1,
@@ -467,10 +538,9 @@ async function applyDownloadedUpgrade(
       installrunpackage: true,
     },
   });
-  const workerMsg = (res as any)?.worker_message;
-  if (Array.isArray(workerMsg) && workerMsg.length > 0) {
+  if (Array.isArray(res?.worker_message) && res.worker_message.length > 0) {
     throw new Error(
-      `Install-from-path returned worker_message: ${JSON.stringify(workerMsg)}`
+      `Install-from-path returned worker_message: ${JSON.stringify(res.worker_message)}`
     );
   }
 }
@@ -482,7 +552,7 @@ async function waitForVersionFlip(
   dsm: DsmClient,
   packageId: string,
   targetVersion: string
-): Promise<any> {
+): Promise<PackageState> {
   const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const live = await listOneState(dsm, packageId);
@@ -508,22 +578,22 @@ async function waitForInstall(
   taskId: string,
   packageId: string,
   targetVersion: string
-): Promise<any> {
+): Promise<PackageState> {
   const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS;
   let nextListCheck = 0;
   let lastStatus = "";
   while (Date.now() < deadline) {
-    const s = await dsm.call<any>({
+    const s = await dsm.call<InstallStatusResp>({
       api: "SYNO.Core.Package.Installation",
       method: "status",
       version: 1,
       post: true,
       params: { task_id: taskId },
     });
-    if ((s as any)?.success === false) {
+    if (s?.success === false) {
       throw new Error(`Install failed mid-flight: ${JSON.stringify(s)}`);
     }
-    const status = String((s as any)?.status ?? "");
+    const status = String(s?.status ?? "");
     if (status !== lastStatus) {
       console.error(`[packages] install ${taskId} status=${status}`);
       lastStatus = status;
@@ -645,16 +715,15 @@ export async function nasPackageInstall(
       // delete it. If Download.check returns nothing, skip — leftover .spk
       // doesn't hurt anything.
       try {
-        const dl = await dsm.call<any>({
+        const dl = await dsm.call<DownloadCheckResp>({
           api: "SYNO.Core.Package.Installation.Download",
           method: "check",
           version: 1,
           post: true,
           params: { taskid: taskId },
         });
-        const path = (dl as any)?.filename;
-        if (typeof path === "string" && path.length > 0) {
-          await cleanupUpgradeTmp(dsm, path);
+        if (typeof dl?.filename === "string" && dl.filename.length > 0) {
+          await cleanupUpgradeTmp(dsm, dl.filename);
         }
       } catch {
         // best-effort
@@ -737,7 +806,7 @@ export async function nasPackageControl(
     cfg,
     { tool: "nas_package_control", args, before },
     async () => {
-      let after: any;
+      let after: PackageState;
       let ok: boolean;
       if (args.action === "stop") {
         if (before.status !== "running") {
@@ -818,7 +887,7 @@ export async function nasPackageUninstall(
         ok,
         error: ok
           ? undefined
-          : `Post-state: package "${args.name}" still installed after uninstall (version ${(after as any)?.version}).`,
+          : `Post-state: package "${args.name}" still installed after uninstall (version ${after?.version}).`,
       };
     }
   );
