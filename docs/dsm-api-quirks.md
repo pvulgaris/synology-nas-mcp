@@ -53,7 +53,7 @@ These took multiple sessions to pin down:
 
 ## Version negotiation
 
-Reference implementations ([N4S4/synology-api](https://github.com/N4S4/synology-api), [gaetangr/synaudit](https://github.com/gaetangr/synaudit), Home Assistant's [py-synologydsm-api](https://github.com/mib1185/py-synologydsm-api)) all query `SYNO.API.Info?query=all` once at startup and use `maxVersion` per API. Many tools in this repo still hardcode versions for stability; the `DsmClient` supports `version: "max"` as an opt-in for new tools that want forward compatibility.
+Reference implementations ([N4S4/synology-api](https://github.com/N4S4/synology-api), [gaetangr/synaudit](https://github.com/gaetangr/synaudit), Home Assistant's [py-synologydsm-api](https://github.com/mib1185/py-synologydsm-api)) all query `SYNO.API.Info?query=all` once at startup and use `maxVersion` per API. This repo doesn't — every tool hardcodes the version it was developed against, because the alternative (negotiating per startup) added a cold-start round-trip and a class of "max version returns a shape this code doesn't understand" failures we'd rather catch via a HAR capture. If a future DSM bump breaks a hardcoded version, surface it as an explicit code change, not a silent floor shift.
 
 ## Form-encoding gotcha
 
