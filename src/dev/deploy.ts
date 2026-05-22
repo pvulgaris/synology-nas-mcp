@@ -255,10 +255,13 @@ async function pollHealth(
   expectedVersion: string,
   port: number
 ): Promise<string> {
-  // /health lives on the same host as DSM but on the daemon port. Bearer not
-  // required (per http.ts) — keep this call simple.
-  const host = new URL(cfg.dsmBaseUrl).hostname;
-  const url = `http://${host}:${port}/health`;
+  // Default: hit /health directly on the daemon port (same host as DSM).
+  // When the daemon binds loopback-only (fronted by `tailscale serve`), that
+  // port isn't reachable from here, so MCP_HEALTH_URL overrides with the serve
+  // endpoint. Bearer not required for /health.
+  const url =
+    process.env.MCP_HEALTH_URL ??
+    `http://${new URL(cfg.dsmBaseUrl).hostname}:${port}/health`;
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   let lastErr: string | undefined;
   while (Date.now() < deadline) {
