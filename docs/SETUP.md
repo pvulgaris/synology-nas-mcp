@@ -7,7 +7,7 @@ Pre-reqs you do once. Most are clickthrough in DSM; the only command-line work i
 In DSM → Package Center, install:
 
 - **Container Manager** (Synology's Docker frontend).
-- **Tailscale** (official Synology package). Sign in to your tailnet. After sign-in, SSH or DSM Terminal: `ifconfig tailscale0` should show an IPv4 address — that's what the MCP HTTP server will bind to.
+- **Tailscale** (official Synology package). Sign in to your tailnet. On DSM the package runs userspace-networking (there is no kernel `tailscale0` interface), so the MCP daemon binds **loopback** and is reached over the tailnet via `tailscale serve` — see "Network model" below.
 
 ## 2. Dedicated DSM user
 
@@ -70,6 +70,25 @@ In the Tailscale admin console → Access Controls, restrict TCP :8765 on the NA
 
 If your tailnet uses the default open ACL ("everyone can talk to everyone"), add a `tag:nas` and restrict `*` → `tag:nas:*` so only your devices reach the NAS.
 
+### Network model: loopback bind + `tailscale serve`
+
+The daemon binds **loopback only** (`127.0.0.1:8765`) and is reached over the tailnet via the host's Tailscale `serve` proxy. This closes the LAN at the socket layer: a device on your home network gets connection-refused on `:8765` because nothing is bound to the NAS's LAN IP. The only thing that can reach the daemon is the host `tailscaled` (the daemon is on loopback), and it only accepts tailnet traffic. The bearer token + Origin check still run behind serve, so the controls stack: tailnet membership → serve → bearer → Origin.
+
+Set up:
+
+1. In the NAS `.env` (step 6), set `MCP_BIND_HOST=127.0.0.1`.
+2. On the NAS, point Tailscale `serve` at the daemon — one-time; it persists in tailscaled state across reboots:
+
+   ```sh
+   sudo tailscale serve --bg --https=443 http://127.0.0.1:8765
+   ```
+
+   Requires HTTPS certificates enabled for your tailnet (admin console → DNS → Enable HTTPS) — **not** Funnel, which is public-internet ingress; leave it off. Confirm with `tailscale serve status` (and `tailscale funnel status`): both should read `(tailnet only)`.
+
+Clients then use the serve URL `https://<your-nas>.<your-tailnet>.ts.net/mcp` (real cert, HTTPS) instead of `http://<nas>:8765/mcp`.
+
+Why this rather than binding the tailnet IP directly: in userspace-networking mode there is no `tailscale0` to bind — but that same mode forwards inbound tailnet connections to localhost, so both `tailscale serve` (`:443`) and the tailnet IP on `:8765` reach the loopback daemon, while the LAN cannot reach either.
+
 ## 5. Optional but useful: DSM notification email
 
 DSM → Control Panel → Notification → Email — point at your Gmail account. When packages have updates, DSM emails you. Set up a Gmail filter to label those messages (e.g., `synology/updates`) so Claude can find them via the Gmail MCP tools.
@@ -110,7 +129,7 @@ Use Container Manager's **Project** feature, not Container. Project mode reads
 ```sh
 docker build --platform linux/amd64 -t synology-nas-mcp:<ver> -t synology-nas-mcp:latest .
 docker save synology-nas-mcp:<ver> synology-nas-mcp:latest -o ~/Downloads/synology-nas-mcp-<ver>.tar
-source dev/source-creds.sh   # once per shell; cached 4h
+source dev/source-creds.sh   # once per shell; keychain-cached (no TTL)
 npm run deploy                # imports image → stops+builds+starts project → polls /health
 ```
 
@@ -121,7 +140,7 @@ Total wall time on Tailscale: ~30 seconds, most of it the 60 MB tar upload.
 1. POST the tar to `/webapi/entry.cgi/SYNO.Docker.Image?api=…&method=upload&version=1` (the chunked-upload URL pattern the Container Manager UI uses; multipart-form field name is `filename`, X-SYNO-TOKEN header required). DSM imports the tar straight into its local Docker registry — no FileStation, no on-disk staging, no shared-folder ACL involved.
 2. `SYNO.Docker.Project.list` to look up the project UUID by name.
 3. `SYNO.Docker.Project.stop` → `Project.build` → `Project.start` to recycle the container with the freshly-imported `:latest`.
-4. Poll `http://<nas>:8765/health` until the response body's `version` matches `package.json`'s. Bails after 120 seconds with the last response text.
+4. Poll `/health` until the response body's `version` matches `package.json`'s (bails after 120 seconds). Defaults to `http://<nas>:8765/health`; with the loopback + serve model, set `MCP_HEALTH_URL=https://<your-nas>.<your-tailnet>.ts.net/health` (e.g. in `dev/.env.local`) so the poll goes through serve instead of the now-closed direct port.
 
 Exits non-zero on any step failure with a precise reason. No additional DSM permissions are required beyond what claude-mcp already has (administrators group, which it joined during setup).
 
@@ -131,21 +150,20 @@ Manual fallback (no script needed): import the tar via Container Manager UI → 
 
 ## 7. Verify
 
-From a Mac on the tailnet (read the bearer token via `op read "op://<vault>/Synology DSM - claude-mcp/mcp_bearer_token"`):
+From a Mac on the tailnet, hit the serve URL (read the bearer via `op read "op://<vault>/Synology DSM - claude-mcp/mcp_bearer_token"`):
 
 ```sh
 TOKEN=$(op read "op://<vault>/Synology DSM - claude-mcp/mcp_bearer_token")
-curl -i http://nas.local:8765/health
-# expect: 200 OK {"ok":true,"server":"synology-nas-mcp","version":"0.1.0"}
+curl -i https://<your-nas>.<your-tailnet>.ts.net/health
+# expect: 200 OK {"ok":true,"server":"synology-nas-mcp","version":"..."}
 
 curl -i -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
-     http://nas.local:8765/mcp
+     https://<your-nas>.<your-tailnet>.ts.net/mcp
 # expect: a tools list including nas_status, nas_packages_list, ...
 ```
 
-From outside the tailnet, the same curl times out (no LAN binding).
-From a tailnet device not in the ACL allowlist, same curl times out at the ACL layer.
+Confirm the LAN is closed: from a device that can reach the NAS's LAN IP, `curl http://<nas-lan-ip>:8765/health` should be **connection-refused** — the daemon binds no LAN-facing socket. (`http://<nas>:8765` over the *tailnet* still works — tailscaled forwards it to the loopback daemon — and is bearer-gated like serve.) A tailnet device not in the ACL allowlist is blocked at the ACL layer.
 
 ## 8. Wire up the local bridge (Claude Desktop only)
 
@@ -169,7 +187,7 @@ After meaningful code changes, re-run `npm install -g .` to update the global in
   "command": "/opt/homebrew/bin/synology-nas-mcp",
   "args": ["bridge"],
   "env": {
-    "MCP_BRIDGE_URL": "http://nas.local:8765/mcp",
+    "MCP_BRIDGE_URL": "https://<your-nas>.<your-tailnet>.ts.net/mcp",
     "MCP_BRIDGE_TOKEN": "<paste bearer token here>"
   }
 }
@@ -178,7 +196,7 @@ After meaningful code changes, re-run `npm install -g .` to update the global in
 Claude Code CLI (one Mac):
 ```sh
 TOKEN=$(op read "op://<vault>/Synology DSM - claude-mcp/mcp_bearer_token")
-claude mcp add synology http://nas.local:8765/mcp --header "Authorization: Bearer $TOKEN"
+claude mcp add synology https://<your-nas>.<your-tailnet>.ts.net/mcp --header "Authorization: Bearer $TOKEN"
 ```
 
 Restart Claude Desktop / Claude Code. Tools `mcp__synology__*` should appear.

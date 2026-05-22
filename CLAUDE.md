@@ -102,9 +102,13 @@ DSM 7's admin APIs (`SYNO.Core.Package.*`, `SYNO.SecurityAdvisor.*`, `SYNO.Core.
 
 Compensating controls (documented in `docs/SETUP.md`): password only in 1Password (never typed), 2FA TOTP enforced, no shared-folder access, no SSH service running, Tailscale ACL restricts ports to your devices, bearer + Origin on the MCP endpoint.
 
-### Synology Container Manager hides Tailscale from `host`-networked containers
+### Synology Tailscale is userspace-networking — bind loopback + `tailscale serve`
 
-Even with `network_mode: host`, `os.networkInterfaces()` inside the container doesn't list `tailscale0`. The CGNAT-range scan in `src/http.ts` (`100.64.0.0/10`) also comes up empty on a DS224+. So `resolveBindHost` falls back to `0.0.0.0`. Safe because: (a) tailnet ACL restricts :8765 to your own devices, (b) bearer token gates every `/mcp` request, (c) Origin check rejects DNS rebinding.
+Even with `network_mode: host`, `os.networkInterfaces()` inside the container doesn't list `tailscale0`, and the CGNAT-range scan in `src/http.ts` (`100.64.0.0/10`) comes up empty on a DS224+ — because the Synology Tailscale package runs **userspace-networking**, so there is no kernel `tailscale0` interface to enumerate or bind.
+
+The hardened deploy model (Option A): set `MCP_BIND_HOST=127.0.0.1` in the NAS `.env` so the daemon binds **loopback only**, and front it with host `tailscale serve --bg --https=443 http://127.0.0.1:8765`. The LAN then can't reach `:8765` at the socket layer (nothing bound on the LAN IP — connection-refused, verified); tailnet devices reach it via serve (`:443`, HTTPS, real `*.ts.net` cert) and, as a side effect of userspace-networking, also via the tailnet IP on `:8765` which tailscaled forwards to loopback. Both paths still pass through the bearer + Origin checks. Serve config persists across reboots (tailscaled state). Clients use `https://<nas>.<tailnet>.ts.net/mcp`. See `docs/SETUP.md` → "Network model".
+
+If `MCP_BIND_HOST` is left empty, `resolveBindHost` falls back to `0.0.0.0` (LAN-reachable, defended only by bearer/ACL/Origin) — that's the unconfigured path, not the recommended one.
 
 ### Streamable HTTP **stateless** mode requires a fresh `McpServer` per request
 
