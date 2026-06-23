@@ -35,7 +35,8 @@
     "serve": "node dist/cli.js serve",
     "daemon": "node dist/cli.js daemon",
     "deploy": "tsx src/dev/runner.ts deploy",
-    "verify": "tsx src/dev/verify-tools.ts"
+    "verify": "tsx src/dev/verify-tools.ts",
+    "test": "node --import tsx --test --test-force-exit src/tools/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
