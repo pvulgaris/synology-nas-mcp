@@ -13,7 +13,7 @@ import os from "node:os";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Config } from "./config.js";
 import { loadCredentials } from "./auth.js";
-import { DsmClient } from "./dsm.js";
+import { DsmClient, makeRouterClient } from "./dsm.js";
 import { createServer } from "./server.js";
 import { VERSION } from "./version.js";
 import { appendAuditRecord, type AuditRecord } from "./audit.js";
@@ -65,8 +65,10 @@ export async function startHttpDaemon(
   const host = resolveBindHost(cfg);
   const port = cfg.mcpBindPort;
   // One DsmClient across all requests — keeps the SID cache warm so we don't
-  // re-login on every MCP call. The per-request McpServer wraps this.
+  // re-login on every MCP call. The per-request McpServer wraps this. The router
+  // client (if configured) is a second singleton, read-only, for the same reason.
   const dsm = new DsmClient(cfg);
+  const router = makeRouterClient(cfg);
 
   const app = express();
   app.use(express.json({ limit: "4mb" }));
@@ -135,7 +137,7 @@ export async function startHttpDaemon(
 
   app.all("/mcp", authMw, async (req, res) => {
     try {
-      const server = createServer(cfg, dsm);
+      const server = createServer(cfg, dsm, router);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });
@@ -173,5 +175,6 @@ export async function startHttpDaemon(
   httpServer.headersTimeout = 60_000;
   httpServer.keepAliveTimeout = 75_000;
   console.error(`[http] listening on http://${host}:${port}/mcp`);
+
   return { host, port };
 }
