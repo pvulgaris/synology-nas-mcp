@@ -1,122 +1,60 @@
 #!/usr/bin/env bash
-# Source this (don't run it) once per dev shell. DSM creds live in the macOS
-# Keychain (encrypted at rest with your login password) under service name
-# "synology-nas-mcp". No TTL — entries persist until you explicitly refresh
-# (after a 1Password rotation, etc.). The secrets never live on plain disk.
+# Source this (don't run it) once per dev shell to load DSM creds from 1Password
+# into the environment for the dev harness (deploy.ts, verify-tools.ts):
 #
 #   source dev/source-creds.sh
 #
-# Override the source vault/item with DSM_OP_VAULT / DSM_OP_ITEM before sourcing.
-# To force a fresh op read after rotating creds in 1Password:
-#   export REFRESH_CREDS=1; source dev/source-creds.sh
-# The keychain entries are NOT cleared up front — only overwritten in place
-# after a successful op fetch. A failed refresh (1Password locked, biometric
-# timeout) leaves the existing entries usable as a fallback.
-# To inspect a single entry:
-#   security find-generic-password -s synology-nas-mcp -a DSM_PASSWORD -w
-# To wipe the cache completely (forces a full re-fetch next source):
-#   for a in DSM_PASSWORD DSM_TOTP_SECRET MCP_BEARER_TOKEN; do
-#     security delete-generic-password -s synology-nas-mcp -a "$a"
-#   done
+# Auth uses your existing `op` setup:
+#   • Interactive: the 1Password desktop-app integration (biometric; ~10-min
+#     rolling session per terminal — standard op behaviour).
+#   • Headless / mobile / CI: set OP_SERVICE_ACCOUNT_TOKEN (e.g. from
+#     dev/.env.local) and reads become prompt-free. We inject it into op only —
+#     never re-export it — so child processes (tsx, docker, the server) don't
+#     inherit vault access.
+#
+# Machine-specific values (real NAS URL, how you source the token) go in
+# dev/.env.local (gitignored), sourced first so it wins.
 
-# Local, gitignored overrides — your real NAS hostname and anything else that
-# shouldn't be committed. Sourced before the defaults below so it wins. Copy
-# dev/.env.local.sample → dev/.env.local to set yours. (.env.local is gitignored.)
-_self="${BASH_SOURCE[0]:-$0}"
-_self_dir="$(cd "$(dirname "$_self")" 2>/dev/null && pwd)"
+_self_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
 [ -n "$_self_dir" ] && [ -f "${_self_dir}/.env.local" ] && . "${_self_dir}/.env.local"
-unset _self _self_dir
+
+# Capture the optional service-account token and drop it from the environment
+# immediately — before any external command (mkdir, op, …) runs — so no child
+# process ever inherits it. It is injected into op only, in _op below.
+_optok="${OP_SERVICE_ACCOUNT_TOKEN:-}"
+unset OP_SERVICE_ACCOUNT_TOKEN
 
 : "${DSM_OP_VAULT:=Claude}"
 : "${DSM_OP_ITEM:=Synology DSM}"
 : "${DSM_BASE_URL:=https://nas.local:5001}"
 : "${DSM_USER:=claude-mcp}"
-
-export DSM_OP_VAULT DSM_OP_ITEM DSM_BASE_URL DSM_USER
-
-# Local AUDIT_LOG_DIR fallback — only used if MCP_AUDIT_URL is unset. The
-# canonical audit log lives on the NAS via the daemon's POST /audit endpoint;
-# this fallback is for unconfigured dev shells (or daemon offline) so writes
-# don't crash trying to mkdir /volume1.
+# Local audit fallback (used only when MCP_AUDIT_URL is unset); the canonical
+# log lives on the NAS via the daemon's POST /audit endpoint.
 : "${AUDIT_LOG_DIR:=$HOME/.cache/synology-nas-mcp/audit}"
-export AUDIT_LOG_DIR
-
-# Route every audit record written from dev tsx through the deployed daemon so
-# the NAS-side log stays the single source of truth. The daemon validates the
-# bearer (already in $MCP_BEARER_TOKEN from the keychain) and appends to
-# /audit (bind-mounted to /volume1/docker/synology-nas-mcp/audit/). Replace
-# `nas.local` with whatever DNS/Tailscale name resolves to your NAS.
 : "${MCP_AUDIT_URL:=http://nas.local:8765/audit}"
-export MCP_AUDIT_URL
-
-# Persist DSM SID across npx tsx invocations so we don't burn a TOTP code on
-# every run (DSM 7.3 rejects TOTP reuse within the 30s window with code 404).
+# Persist the DSM SID across tsx runs so we don't burn a TOTP code each process
+# (DSM rejects TOTP reuse within the 30s window with code 404).
 : "${DSM_SID_CACHE_FILE:=$HOME/.cache/synology-nas-mcp/sid.json}"
-export DSM_SID_CACHE_FILE
+export DSM_OP_VAULT DSM_OP_ITEM DSM_BASE_URL DSM_USER \
+       AUDIT_LOG_DIR MCP_AUDIT_URL DSM_SID_CACHE_FILE
+# Cache dir holds the SID + audit log — keep it owner-only.
+mkdir -p "$AUDIT_LOG_DIR" "$(dirname "$DSM_SID_CACHE_FILE")" 2>/dev/null
+chmod 700 "$AUDIT_LOG_DIR" "$(dirname "$DSM_SID_CACHE_FILE")" 2>/dev/null
 
-_cache_dir="${HOME}/.cache/synology-nas-mcp"
-_kc_service="synology-nas-mcp"
-
-mkdir -p "$_cache_dir" 2>/dev/null
-chmod 700 "$_cache_dir" 2>/dev/null
-
-_kc_get() {
-  security find-generic-password -s "$_kc_service" -a "$1" -w 2>/dev/null
+# Read-only service-account token (captured above) makes `op read` prompt-free;
+# injected into op only — never re-exported — so children don't inherit vault
+# access. Absent → op falls back to the interactive desktop-app integration.
+_op() {
+  if [ -n "$_optok" ]; then OP_SERVICE_ACCOUNT_TOKEN="$_optok" op read "$1"
+  else op read "$1"; fi
 }
 
-_kc_set() {
-  # -U updates if the entry exists, adds if not. -T /usr/bin/security keeps
-  # the ACL scoped to subsequent `security` CLI reads (no GUI app prompts).
-  security add-generic-password -U \
-    -s "$_kc_service" -a "$1" -w "$2" \
-    -T /usr/bin/security >/dev/null
-}
+_base="op://${DSM_OP_VAULT}/${DSM_OP_ITEM}"
+DSM_PASSWORD=$(_op "${_base}/password")             || { echo "op read password failed" >&2; _optok=""; return 1; }
+DSM_TOTP_SECRET=$(_op "${_base}/totp")              || { echo "op read totp failed" >&2; _optok=""; return 1; }
+MCP_BEARER_TOKEN=$(_op "${_base}/mcp_bearer_token") || { echo "op read mcp_bearer_token failed" >&2; _optok=""; return 1; }
+export DSM_PASSWORD DSM_TOTP_SECRET MCP_BEARER_TOKEN
+echo "[dev] DSM creds loaded from 1Password"
 
-_kc_populated() {
-  [ -n "$(_kc_get DSM_PASSWORD)" ] \
-    && [ -n "$(_kc_get DSM_TOTP_SECRET)" ] \
-    && [ -n "$(_kc_get MCP_BEARER_TOKEN)" ]
-}
-
-# One-shot migration from the legacy plain-file cache. If the old file
-# exists, source it once, push values into the keychain, then delete it.
-# Idempotent — subsequent sources just skip this block.
-_legacy="${_cache_dir}/creds"
-if [ -f "$_legacy" ]; then
-  # shellcheck disable=SC1090
-  . "$_legacy"
-  if [ -n "${DSM_PASSWORD:-}" ] && [ -n "${DSM_TOTP_SECRET:-}" ] && [ -n "${MCP_BEARER_TOKEN:-}" ]; then
-    _kc_set DSM_PASSWORD     "$DSM_PASSWORD"
-    _kc_set DSM_TOTP_SECRET  "$DSM_TOTP_SECRET"
-    _kc_set MCP_BEARER_TOKEN "$MCP_BEARER_TOKEN"
-    rm -f "$_legacy"
-    echo "[dev] migrated DSM creds: ${_legacy} → macOS Keychain (service=$_kc_service), file removed"
-  fi
-fi
-# Also clean up the obsolete freshness-marker file from the brief TTL era.
-rm -f "${_cache_dir}/keychain-cached-at" 2>/dev/null
-unset _legacy
-
-if [ "${REFRESH_CREDS:-}" != "1" ] && _kc_populated; then
-  DSM_PASSWORD=$(_kc_get DSM_PASSWORD)
-  DSM_TOTP_SECRET=$(_kc_get DSM_TOTP_SECRET)
-  MCP_BEARER_TOKEN=$(_kc_get MCP_BEARER_TOKEN)
-  export DSM_PASSWORD DSM_TOTP_SECRET MCP_BEARER_TOKEN
-  echo "[dev] DSM creds loaded from macOS Keychain (service=$_kc_service)"
-else
-  base="op://${DSM_OP_VAULT}/${DSM_OP_ITEM}"
-  _dsm_pw=$(op read "${base}/password") || { echo "op read password failed"; return 1; }
-  _dsm_totp=$(op read "${base}/totp") || { echo "op read totp failed"; return 1; }
-  _dsm_bearer=$(op read "${base}/mcp_bearer_token") || { echo "op read mcp_bearer_token failed"; return 1; }
-  _kc_set DSM_PASSWORD     "$_dsm_pw"
-  _kc_set DSM_TOTP_SECRET  "$_dsm_totp"
-  _kc_set MCP_BEARER_TOKEN "$_dsm_bearer"
-  export DSM_PASSWORD="$_dsm_pw"
-  export DSM_TOTP_SECRET="$_dsm_totp"
-  export MCP_BEARER_TOKEN="$_dsm_bearer"
-  unset _dsm_pw _dsm_totp _dsm_bearer
-  echo "[dev] DSM creds refreshed from 1Password → macOS Keychain"
-fi
-
-unset _cache_dir _kc_service
-unset -f _kc_get _kc_set _kc_populated
+unset _self_dir _optok _base
+unset -f _op

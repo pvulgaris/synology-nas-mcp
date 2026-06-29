@@ -129,7 +129,7 @@ Use Container Manager's **Project** feature, not Container. Project mode reads
 ```sh
 docker build --platform linux/amd64 -t synology-nas-mcp:<ver> -t synology-nas-mcp:latest .
 docker save synology-nas-mcp:<ver> synology-nas-mcp:latest -o ~/Downloads/synology-nas-mcp-<ver>.tar
-source dev/source-creds.sh   # once per shell; keychain-cached (no TTL)
+source dev/source-creds.sh   # once per shell; reads creds from 1Password via op
 npm run deploy                # imports image → stops+builds+starts project → polls /health
 ```
 

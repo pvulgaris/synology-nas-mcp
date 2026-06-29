@@ -44,7 +44,7 @@ docker build --platform linux/amd64 \
 docker save synology-nas-mcp:<ver> synology-nas-mcp:latest \
   -o ~/Downloads/synology-nas-mcp-<ver>.tar
 
-source dev/source-creds.sh   # once per shell; keychain-cached, no TTL
+source dev/source-creds.sh   # once per shell; reads creds from 1Password via op
 npm run deploy                # ~30s: upload+import+stop+build+start+/health-verify
 ```
 
