@@ -8,9 +8,9 @@
  * `share_quota_used`, both in MB.
  */
 
-import type { DsmClient } from "../dsm.js";
+import type { SynoClient } from "../dsm.js";
 
-export async function nasSharesList(dsm: DsmClient) {
+export async function nasSharesList(dsm: SynoClient) {
   const data = await dsm.call({
     api: "SYNO.Core.Share",
     method: "list",

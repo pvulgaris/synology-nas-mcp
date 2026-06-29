@@ -15,7 +15,7 @@
  * parses defensively so minor shape drift degrades to `available:false` not a throw.
  */
 
-import type { DsmClient } from "../dsm.js";
+import type { SynoClient } from "../dsm.js";
 import type {
   ComponentUpdate,
   OsUpdateStatus,
@@ -29,7 +29,7 @@ import { routerPackagesCheckUpdates, routerSrmOsCheckUpdate } from "./router.js"
 /** DSM OS-update check. Reads the current version from `SYNO.Core.System info`
  *  at **v3** (DSM-only; SRM caps at v1) — the single device-specific knob the
  *  shared osCheckUpdate takes. */
-export function nasDsmOsCheckUpdate(dsm: DsmClient): Promise<OsUpdateStatus> {
+export function nasDsmOsCheckUpdate(dsm: SynoClient): Promise<OsUpdateStatus> {
   return osCheckUpdate(dsm, 3);
 }
 
@@ -93,8 +93,8 @@ async function runSource(
 }
 
 export async function synologyUpdateDigest(
-  dsm: DsmClient,
-  router: DsmClient | null
+  dsm: SynoClient,
+  router: SynoClient | null
 ): Promise<UpdateDigest> {
   const tasks: Promise<SourceResult>[] = [
     runSource("nas_os", async () => {

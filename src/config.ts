@@ -24,7 +24,7 @@
  *  SYNO.* Web API as DSM on port 8001. Its package/upgrade reads are admin-gated
  *  (no selective grant), so `user` must be an admin — use a *dedicated* SRM admin
  *  (claude-mcp-style; SRM supports extra admins via "Grant administrator
- *  privilege"), not the primary login. Read-only is enforced by the DsmClient
+ *  privilege"), not the primary login. Read-only is enforced by the SynoClient
  *  read-only mode. null unless ROUTER_BASE_URL is set. */
 export interface RouterTarget {
   baseUrl: string;

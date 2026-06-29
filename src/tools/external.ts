@@ -8,9 +8,9 @@
  * StealthWorker botnet all target this surface).
  */
 
-import type { DsmClient } from "../dsm.js";
+import type { SynoClient } from "../dsm.js";
 
-export async function nasExternalAccess(dsm: DsmClient) {
+export async function nasExternalAccess(dsm: SynoClient) {
   const [qc, qcMisc, ddns, reverseProxy, appPortal, portForwarding] =
     await Promise.all([
       dsm.call({ api: "SYNO.Core.QuickConnect", method: "get", version: 2 }).catch(() => null),

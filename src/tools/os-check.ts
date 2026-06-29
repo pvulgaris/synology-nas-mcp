@@ -15,11 +15,11 @@
  * read degrades to a warning on the result rather than failing the whole check.
  */
 
-import type { DsmClient } from "../dsm.js";
+import type { SynoClient } from "../dsm.js";
 import { mapOsUpdate, type OsUpdateStatus } from "../types.js";
 
 export async function osCheckUpdate(
-  client: DsmClient,
+  client: SynoClient,
   systemInfoVersion: number
 ): Promise<OsUpdateStatus> {
   const INFO_FAILED = Symbol("info_failed");

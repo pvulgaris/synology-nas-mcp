@@ -9,7 +9,7 @@
  * No tool name → run the whole suite. Tool name → run just that one.
  */
 import { loadConfig } from "../config.js";
-import { DsmClient, makeRouterClient } from "../dsm.js";
+import { SynoClient, makeRouterClient } from "../dsm.js";
 import { nasStatus, nasStorageHealth } from "../tools/system.js";
 import { nasDsmOsCheckUpdate, synologyUpdateDigest } from "../tools/updates.js";
 import { routerSrmOsCheckUpdate } from "../tools/router.js";
@@ -28,7 +28,7 @@ import { nasExternalAccess } from "../tools/external.js";
 import { nasNotifications } from "../tools/notifications.js";
 import { nasCertificates } from "../tools/certificates.js";
 
-const SUITE: Record<string, (dsm: DsmClient) => Promise<unknown>> = {
+const SUITE: Record<string, (dsm: SynoClient) => Promise<unknown>> = {
   nas_status: nasStatus,
   nas_storage_health: nasStorageHealth,
   nas_shares_list: nasSharesList,
@@ -48,7 +48,7 @@ const SUITE: Record<string, (dsm: DsmClient) => Promise<unknown>> = {
 // router is configured so the suite still passes on a NAS-only setup.
 const ROUTER_AWARE: Record<
   string,
-  (dsm: DsmClient, router: DsmClient | null) => Promise<unknown>
+  (dsm: SynoClient, router: SynoClient | null) => Promise<unknown>
 > = {
   synology_update_digest: (dsm, router) => synologyUpdateDigest(dsm, router),
   router_srm_os_check_update: (_dsm, router) =>
@@ -175,7 +175,7 @@ async function main() {
   if (cfg.tlsSkipVerify) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
-  const dsm = new DsmClient(cfg);
+  const dsm = new SynoClient(cfg);
   const router = makeRouterClient(cfg);
 
   const args = process.argv.slice(2);

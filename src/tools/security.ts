@@ -13,7 +13,7 @@
  * SYNO.Core.User.PasswordPolicy           — password policy (v1)
  */
 
-import type { DsmClient } from "../dsm.js";
+import type { SynoClient } from "../dsm.js";
 
 const SCAN_POLL_MS = 2000;
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000;
@@ -28,7 +28,7 @@ const SEVERITY_BUCKET: Record<string, string> = {
   info: "info",
 };
 
-export async function nasSecurityAdvisorScan(dsm: DsmClient) {
+export async function nasSecurityAdvisorScan(dsm: SynoClient) {
   // Kick off a scan. Already-running scans return non-success; ignore and poll.
   await dsm
     .call({
@@ -93,7 +93,7 @@ export async function nasSecurityAdvisorScan(dsm: DsmClient) {
 // DSM 7 returns additional[] fields flat on each user object (not nested).
 // `expired` is a string: "normal" or "now"; pass through and let the consumer
 // interpret rather than guessing at boolean semantics.
-export async function nasUsersList(dsm: DsmClient) {
+export async function nasUsersList(dsm: SynoClient) {
   const data = await dsm.call({
     api: "SYNO.Core.User",
     method: "list",
@@ -132,7 +132,7 @@ export async function nasUsersList(dsm: DsmClient) {
 // - GeoIP `.list` returns the country catalog; per-profile blocking config
 //   lives inside the profile.get response when firewall is enabled.
 // - `Firewall.Adapter.list` doesn't exist on DSM 7 — use Network.Interface.
-export async function nasFirewallList(dsm: DsmClient) {
+export async function nasFirewallList(dsm: SynoClient) {
   // AutoBlock.Rules.list requires both `offset/limit` AND `type=allow|deny`.
   // 5100 with no params = missing required fields; 5102 with an invalid type
   // value = enum rejection. Iterating both types captures the full allowlist
@@ -219,7 +219,7 @@ export async function nasFirewallList(dsm: DsmClient) {
 // requestFormat:"JSON" in API.Info but that describes the RESPONSE — the
 // request itself is form-encoded like everything else. (Working clients
 // confirmed: synaudit, NielsKrijnen, N4S4, synology-community/go-synology.)
-export async function nasDsmSecuritySettings(dsm: DsmClient) {
+export async function nasDsmSecuritySettings(dsm: SynoClient) {
   const [security, web, tlsProfile, terminal, smb, nfs, autoUpdate, passwd, activeInsight] = await Promise.all([
     dsm.call({ api: "SYNO.Core.Security.DSM", method: "get", version: 4 }).catch(() => null),
     dsm.call({ api: "SYNO.Core.Web.DSM", method: "get", version: 2 }).catch(() => null),

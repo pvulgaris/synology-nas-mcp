@@ -2,7 +2,7 @@
  * System-level read tools: status, storage health.
  */
 
-import type { DsmClient } from "../dsm.js";
+import type { SynoClient } from "../dsm.js";
 
 // DSM returns up_time as a duration string ("HH:MM:SS" under 100h, or
 // "N days HH:MM:SS" beyond). Parse to seconds so consumers can do math
@@ -15,7 +15,7 @@ function parseUpTime(s: unknown): number | null {
   return Number(days) * 86400 + Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
 }
 
-export async function nasStatus(dsm: DsmClient) {
+export async function nasStatus(dsm: SynoClient) {
   const [info, util] = await Promise.all([
     dsm.call({ api: "SYNO.Core.System", method: "info", version: 3 }),
     dsm.call({
@@ -41,7 +41,7 @@ export async function nasStatus(dsm: DsmClient) {
 // disks, and storagePools in one shot. Used by HA's py-synologydsm-api and N4S4
 // against DSM 7.x. The .Volume.list path requires SYNO.API.Info version
 // negotiation; this one doesn't.
-export async function nasStorageHealth(dsm: DsmClient) {
+export async function nasStorageHealth(dsm: SynoClient) {
   const info = await dsm.call({
     api: "SYNO.Storage.CGI.Storage",
     method: "load_info",

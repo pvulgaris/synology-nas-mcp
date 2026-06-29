@@ -7,9 +7,9 @@
  * "SMTP fine, just verify-cert is off."
  */
 
-import type { DsmClient } from "../dsm.js";
+import type { SynoClient } from "../dsm.js";
 
-export async function nasNotifications(dsm: DsmClient) {
+export async function nasNotifications(dsm: SynoClient) {
   const mail = await dsm
     .call({ api: "SYNO.Core.Notification.Mail.Conf", method: "get", version: 1 })
     .catch(() => null);

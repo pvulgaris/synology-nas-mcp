@@ -9,20 +9,20 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DsmError, type DsmClient, type DsmCallOptions } from "../dsm.js";
+import { DsmError, type SynoClient, type DsmCallOptions } from "../dsm.js";
 import { routerPackagesCheckUpdates, routerSrmOsCheckUpdate } from "./router.js";
 
-function fakeClient(handlers: Record<string, (params: Record<string, unknown>) => unknown>): DsmClient {
+function fakeClient(handlers: Record<string, (params: Record<string, unknown>) => unknown>): SynoClient {
   const call = async (opts: DsmCallOptions): Promise<unknown> => {
     const key = `${opts.api}.${opts.method}`;
     const h = handlers[key];
     if (!h) throw new Error(`unexpected DSM call: ${key}`);
     return h((opts.params ?? {}) as Record<string, unknown>);
   };
-  return { call } as unknown as DsmClient;
+  return { call } as unknown as SynoClient;
 }
 
-/** The error type DsmClient.callOnce throws — what the router's catch
+/** The error type SynoClient.callOnce throws — what the router's catch
  *  discriminates on (only 102/103/104 degrade; everything else propagates). */
 function dsmErr(code: number, api = "SYNO.Core.Package.Server", method = "list"): DsmError {
   return new DsmError(api, method, code, undefined, `${api}.${method} failed (code ${code})`);

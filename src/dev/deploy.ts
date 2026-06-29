@@ -151,7 +151,7 @@ async function uploadImage(
 /** Run a DSM Web API call with SynoToken via curl. DSM gates mutating
  *  endpoints (Image.upload, Project.{stop,start,build}) on the CSRF token
  *  even when the SID is valid; without it you get a misleading code 119
- *  "SID not found". curl is also easier than coercing a fresh DsmClient to
+ *  "SID not found". curl is also easier than coercing a fresh SynoClient to
  *  thread the token through. */
 async function dsmCallWithToken<T = any>(
   cfg: Config,
@@ -310,7 +310,7 @@ export async function deploy(cfg: Config, args: DeployArgs): Promise<DeployResul
   // Login as the deploy user (defaults to claude-mcp; overridable via env).
   // We carry SID + SynoToken explicitly through the rest of the flow — every
   // mutating Docker.* endpoint requires the CSRF token, and threading it via
-  // DsmClient would mean a bigger change for a one-shot path.
+  // SynoClient would mean a bigger change for a one-shot path.
   const auth = await loginForDeploy(cfg);
   log(`logged in as ${auth.user}`);
 

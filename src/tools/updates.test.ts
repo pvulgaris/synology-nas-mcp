@@ -11,24 +11,24 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DsmError, type DsmClient, type DsmCallOptions } from "../dsm.js";
+import { DsmError, type SynoClient, type DsmCallOptions } from "../dsm.js";
 import { mapOsUpdate } from "../types.js";
 import { synologyUpdateDigest } from "./updates.js";
 
 /** Build a fake client from `api.method` → handler. A handler that throws makes
  *  `call` reject (simulating a DSM error / device down); a missing key throws an
  *  explicit "unexpected" so a drifting call shape fails loud, not silently. */
-function fakeClient(handlers: Record<string, (params: Record<string, unknown>) => unknown>): DsmClient {
+function fakeClient(handlers: Record<string, (params: Record<string, unknown>) => unknown>): SynoClient {
   const call = async (opts: DsmCallOptions): Promise<unknown> => {
     const key = `${opts.api}.${opts.method}`;
     const h = handlers[key];
     if (!h) throw new Error(`unexpected DSM call: ${key}`);
     return h((opts.params ?? {}) as Record<string, unknown>);
   };
-  return { call } as unknown as DsmClient;
+  return { call } as unknown as SynoClient;
 }
 
-/** A DsmError as DsmClient.callOnce throws it — the type the router's catch keys
+/** A DsmError as SynoClient.callOnce throws it — the type the router's catch keys
  *  on (only 102/103/104 degrade to a note; outages/auth errors propagate). */
 function dsmErr(code: number, api = "SYNO.Core.Package.Server", method = "list"): DsmError {
   return new DsmError(api, method, code, undefined, `${api}.${method} failed (code ${code})`);
@@ -114,7 +114,7 @@ test("mapOsUpdate: stringy reboot 'false' is false, not Boolean('false')===true"
 // ── synologyUpdateDigest ─────────────────────────────────────────────────────────
 
 /** NAS fake with nothing pending: clean DSM OS check, installed == catalog. */
-function cleanNas(): DsmClient {
+function cleanNas(): SynoClient {
   return fakeClient({
     "SYNO.Core.System.info": () => ({ firmware_ver: "DSM 7.2.2-72806" }),
     "SYNO.Core.Upgrade.Server.check": () => ({ available: false }),

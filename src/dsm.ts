@@ -1,6 +1,14 @@
 /**
- * Thin DSM Web API client. Handles login (with TOTP), SID caching, and
- * automatic re-auth on 119 ("SID not found").
+ * Thin Synology Web API client (`SynoClient`). Handles login (with TOTP), SID
+ * caching, and automatic re-auth on 119 ("SID not found").
+ *
+ * One client serves both targets: the DSM NAS and the SRM router speak the same
+ * SYNO.* Web API, so "DSM vs SRM" is expressed as Config (base URL, auth path /
+ * version, session) plus construction options (read-only, cred loader) — not as a
+ * second client class. The wire shapes it exchanges keep the `Dsm*` prefix
+ * (`DsmResponse`, `DsmError`, `DsmCallOptions`): "DSM Web API" is Synology's name
+ * for the protocol *both* devices implement, so `Dsm*` names the protocol while
+ * `SynoClient` names the connection.
  *
  * Reference: Synology DSM Login Web API Guide; SYNO.API.* family endpoints.
  * We hit `entry.cgi` for almost everything (the unified DSM dispatcher).
@@ -109,7 +117,7 @@ export class DsmError extends Error {
   }
 }
 
-export interface DsmClientOptions {
+export interface SynoClientOptions {
   /** Refuse any mutating call (POST or non-read method). Used by the router
    *  client, which authenticates as a dedicated SRM admin — read-only is
    *  enforced here so a stray write can't leave the process. */
@@ -119,7 +127,7 @@ export interface DsmClientOptions {
   credLoader?: (cfg: Config) => Promise<DsmOnlyCredentials>;
 }
 
-export class DsmClient {
+export class SynoClient {
   private creds: DsmOnlyCredentials | null = null;
   private sid: string | null = null;
   private sidObtainedAt = 0;
@@ -130,7 +138,7 @@ export class DsmClient {
   // same 30s TOTP code; DSM accepts the first and 404s the rest.
   private loginInFlight: Promise<void> | null = null;
 
-  constructor(private cfg: Config, opts: DsmClientOptions = {}) {
+  constructor(private cfg: Config, opts: SynoClientOptions = {}) {
     this.readOnly = opts.readOnly ?? false;
     this.credLoader = opts.credLoader ?? loadCredentials;
     const cachePath = this.cfg.sidCacheFile;
@@ -207,7 +215,7 @@ export class DsmClient {
   async call<T = any>(opts: DsmCallOptions): Promise<T> {
     if (this.readOnly && (opts.post || !READ_METHODS.has(opts.method))) {
       throw new Error(
-        `Read-only DsmClient refused ${opts.api}.${opts.method}` +
+        `Read-only SynoClient refused ${opts.api}.${opts.method}` +
           `${opts.post ? " (POST)" : ""} — this client is restricted to read methods.`
       );
     }
@@ -302,9 +310,9 @@ export class DsmClient {
 /** Build the router (SRM) client from a Config, or null when no router target is
  *  configured. Always read-only and bearer-free — the single place that wiring
  *  lives, so the daemon and the CLI can't drift. */
-export function makeRouterClient(cfg: Config): DsmClient | null {
+export function makeRouterClient(cfg: Config): SynoClient | null {
   if (!cfg.router) return null;
-  return new DsmClient(routerConfigFrom(cfg), {
+  return new SynoClient(routerConfigFrom(cfg), {
     readOnly: true,
     credLoader: (c) => loadDsmOnlyCredentials(c.opVault, c.opItem, "ROUTER_DSM"),
   });

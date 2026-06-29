@@ -13,7 +13,7 @@ import type { Config } from "./config.js";
 
 const execFileP = promisify(execFile);
 
-/** The login secrets a DsmClient actually needs (NAS or router). */
+/** The login secrets a SynoClient actually needs (NAS or router). */
 export interface DsmOnlyCredentials {
   password: string;
   totpSecret: string;

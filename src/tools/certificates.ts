@@ -6,7 +6,7 @@
  * threshold "warn at 30 days" without parsing the date itself.
  */
 
-import type { DsmClient } from "../dsm.js";
+import type { SynoClient } from "../dsm.js";
 
 function daysUntil(validTill: unknown): number | null {
   if (typeof validTill !== "string") return null;
@@ -15,7 +15,7 @@ function daysUntil(validTill: unknown): number | null {
   return Math.floor((t - Date.now()) / 86400000);
 }
 
-export async function nasCertificates(dsm: DsmClient) {
+export async function nasCertificates(dsm: SynoClient) {
   const data = await dsm.call({
     api: "SYNO.Core.Certificate.CRT",
     method: "list",

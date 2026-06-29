@@ -26,7 +26,7 @@
  * param combos until 4501 goes away, without rebuilding anything.
  */
 import { loadConfig } from "../config.js";
-import { DsmClient } from "../dsm.js";
+import { SynoClient } from "../dsm.js";
 import {
   nasPackagesList,
   nasPackagesCheckUpdates,
@@ -70,7 +70,7 @@ async function main() {
   if (cfg.tlsSkipVerify) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
-  const dsm = new DsmClient(cfg);
+  const dsm = new SynoClient(cfg);
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd) {
     console.error("usage: runner <list|pending|catalog|update|raw> …");

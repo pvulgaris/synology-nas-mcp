@@ -12,7 +12,7 @@ DSM error codes are NOT what they sound like — verified against [N4S4/synology
 | 103 | Method not found | API exists; method doesn't. Often a renamed method (`list` → `load`, etc.) |
 | 105 | Insufficient permissions | Even admin users hit this on some endpoints (e.g. `Notification.Rule.list`) |
 | 114 | **"Lost parameters"** — missing a required param (NOT "API key mismatch") |
-| 117 / 119 | SID expired — `DsmClient.call()` auto-retries with fresh login |
+| 117 / 119 | SID expired — `SynoClient.call()` auto-retries with fresh login |
 | 120 | Invalid `additional[]` key — DSM rejects unknown field names |
 | 5100 | "Unable to perform" — generic internal failure (NOT "no records to return") |
 | 5102 | Invalid enum value (e.g. `type=blocked` rejected; valid values are `allow`/`deny`) |

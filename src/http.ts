@@ -13,7 +13,7 @@ import os from "node:os";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Config } from "./config.js";
 import { loadCredentials } from "./auth.js";
-import { DsmClient, makeRouterClient } from "./dsm.js";
+import { SynoClient, makeRouterClient } from "./dsm.js";
 import { createServer } from "./server.js";
 import { VERSION } from "./version.js";
 import { appendAuditRecord, type AuditRecord } from "./audit.js";
@@ -64,10 +64,10 @@ export async function startHttpDaemon(
   const expected = `Bearer ${creds.bearerToken}`;
   const host = resolveBindHost(cfg);
   const port = cfg.mcpBindPort;
-  // One DsmClient across all requests — keeps the SID cache warm so we don't
+  // One SynoClient across all requests — keeps the SID cache warm so we don't
   // re-login on every MCP call. The per-request McpServer wraps this. The router
   // client (if configured) is a second singleton, read-only, for the same reason.
-  const dsm = new DsmClient(cfg);
+  const dsm = new SynoClient(cfg);
   const router = makeRouterClient(cfg);
 
   const app = express();
@@ -109,7 +109,7 @@ export async function startHttpDaemon(
   // request is fully independent. The MCP SDK's stateless pattern requires a
   // FRESH McpServer + transport per request — a shared server gets stuck in
   // a "ready" state after first use and 500s on subsequent calls. We hoist
-  // the DsmClient outside (singleton with SID cache) so per-request server
+  // the SynoClient outside (singleton with SID cache) so per-request server
   // creation is cheap.
   // Audit ingest endpoint — accepts a pre-built AuditRecord and appends it to
   // the canonical NAS-side log. Used by dev tsx invocations (via MCP_AUDIT_URL)

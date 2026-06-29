@@ -18,7 +18,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { loadConfig } from "./config.js";
 import { createServer } from "./server.js";
-import { DsmClient, makeRouterClient } from "./dsm.js";
+import { SynoClient, makeRouterClient } from "./dsm.js";
 import { startHttpDaemon } from "./http.js";
 
 async function serveStdio() {
@@ -34,7 +34,7 @@ async function serveStdio() {
   if (cfg.tlsSkipVerify) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
-  const dsm = new DsmClient(cfg);
+  const dsm = new SynoClient(cfg);
   const router = makeRouterClient(cfg);
   const server = createServer(cfg, dsm, router);
   const transport = new StdioServerTransport();
