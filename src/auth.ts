@@ -79,7 +79,7 @@ export async function loadCredentials(cfg: Config): Promise<Credentials> {
 
 /** Load just the DSM login secrets (password + totp) for a target — used by the
  *  router client, which has no bearer of its own. Env fast-path keys off
- *  `<envPrefix>_PASSWORD` / `<envPrefix>_TOTP_SECRET` (e.g. ROUTER_DSM_*), else
+ *  `<envPrefix>_PASSWORD` / `<envPrefix>_TOTP_SECRET` (e.g. SRM_*), else
  *  `op read op://<vault>/<item>/{password,totp}`. Fails closed on blank secrets. */
 export async function loadDsmOnlyCredentials(
   opVault: string,
@@ -99,7 +99,9 @@ export async function loadDsmOnlyCredentials(
     ]);
     creds = { password, totpSecret };
   }
-  assertDsmCreds(creds, envPrefix === "DSM" ? "DSM" : "Router");
+  // Label the fail-closed error with the prefix itself ("DSM" / "SRM") — both are
+  // the product name now, so no need to special-case the non-DSM target.
+  assertDsmCreds(creds, envPrefix);
   return creds;
 }
 

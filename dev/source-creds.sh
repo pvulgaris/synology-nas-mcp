@@ -58,16 +58,16 @@ MCP_BEARER_TOKEN=$(_op "${_base}/mcp_bearer_token") || { echo "op read mcp_beare
 export DSM_PASSWORD DSM_TOTP_SECRET MCP_BEARER_TOKEN
 echo "[dev] DSM creds loaded from 1Password"
 
-# Router (SRM) creds — gated on ROUTER_BASE_URL, the same switch config.ts uses.
-if [ -n "${ROUTER_BASE_URL:-}" ]; then
-  : "${ROUTER_OP_ITEM:=Synology SRM}"
-  export ROUTER_OP_ITEM
-  _rbase="op://${DSM_OP_VAULT}/${ROUTER_OP_ITEM}"
-  if ROUTER_DSM_PASSWORD=$(_op "${_rbase}/password") && ROUTER_DSM_TOTP_SECRET=$(_op "${_rbase}/totp"); then
-    export ROUTER_DSM_PASSWORD ROUTER_DSM_TOTP_SECRET
+# Router (SRM) creds — gated on SRM_BASE_URL, the same switch config.ts uses.
+if [ -n "${SRM_BASE_URL:-}" ]; then
+  : "${SRM_OP_ITEM:=Synology SRM}"
+  export SRM_OP_ITEM
+  _rbase="op://${DSM_OP_VAULT}/${SRM_OP_ITEM}"
+  if SRM_PASSWORD=$(_op "${_rbase}/password") && SRM_TOTP_SECRET=$(_op "${_rbase}/totp"); then
+    export SRM_PASSWORD SRM_TOTP_SECRET
     echo "[dev] router (SRM) creds loaded from 1Password"
   else
-    echo "[dev] ROUTER_BASE_URL set but op read failed; router creds not loaded" >&2
+    echo "[dev] SRM_BASE_URL set but op read failed; router creds not loaded" >&2
   fi
   unset _rbase
 fi

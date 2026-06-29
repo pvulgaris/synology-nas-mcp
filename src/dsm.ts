@@ -314,6 +314,6 @@ export function makeRouterClient(cfg: Config): SynoClient | null {
   if (!cfg.router) return null;
   return new SynoClient(routerConfigFrom(cfg), {
     readOnly: true,
-    credLoader: (c) => loadDsmOnlyCredentials(c.opVault, c.opItem, "ROUTER_DSM"),
+    credLoader: (c) => loadDsmOnlyCredentials(c.opVault, c.opItem, "SRM"),
   });
 }

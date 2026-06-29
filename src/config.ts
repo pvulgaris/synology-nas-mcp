@@ -15,9 +15,9 @@
  *   TLS_REJECT_UNAUTHORIZED  set "0" to skip cert validation for self-signed DSM certs (default: skip in dev)
  *
  * Optional — router (SRM) target, all back-compat (unset = NAS-only):
- *   ROUTER_BASE_URL       e.g. https://router.local:8001 (presence alone enables the router)
- *   ROUTER_USER           dedicated SRM admin account name (default: "claude-mcp", read-only usage)
- *   ROUTER_OP_ITEM        1Password item holding router password+totp (default: "Synology SRM - claude-mcp")
+ *   SRM_BASE_URL       e.g. https://router.local:8001 (presence alone enables the router)
+ *   SRM_USER           dedicated SRM admin account name (default: "claude-mcp", read-only usage)
+ *   SRM_OP_ITEM        1Password item holding router password+totp (default: "Synology SRM - claude-mcp")
  */
 
 /** Optional second target: the Synology router (SRM). SRM speaks the same
@@ -25,7 +25,7 @@
  *  (no selective grant), so `user` must be an admin — use a *dedicated* SRM admin
  *  (claude-mcp-style; SRM supports extra admins via "Grant administrator
  *  privilege"), not the primary login. Read-only is enforced by the SynoClient
- *  read-only mode. null unless ROUTER_BASE_URL is set. */
+ *  read-only mode. null unless SRM_BASE_URL is set. */
 export interface RouterTarget {
   baseUrl: string;
   user: string;
@@ -105,25 +105,25 @@ export function loadConfig(): Config {
   };
 }
 
-/** Read the optional router target. Presence of ROUTER_BASE_URL alone gates it;
- *  ROUTER_USER and ROUTER_OP_ITEM default to the dedicated-claude-mcp convention
- *  (see RouterTarget). ROUTER_USER must NOT be required() here: parseRouter runs
+/** Read the optional router target. Presence of SRM_BASE_URL alone gates it;
+ *  SRM_USER and SRM_OP_ITEM default to the dedicated-claude-mcp convention
+ *  (see RouterTarget). SRM_USER must NOT be required() here: parseRouter runs
  *  inside loadConfig, so a missing required env would throw and take down the
  *  entire NAS daemon at boot — not just the optional router. */
 function parseRouter(): RouterTarget | null {
-  const baseUrl = process.env.ROUTER_BASE_URL?.replace(/\/$/, "");
+  const baseUrl = process.env.SRM_BASE_URL?.replace(/\/$/, "");
   if (!baseUrl) return null;
   return {
     baseUrl,
-    // `|| ` not optional()'s `??`: Container Manager injects `ROUTER_USER:
-    // ${ROUTER_USER:-}`, i.e. an empty string (not unset) when the host var is
+    // `|| ` not optional()'s `??`: Container Manager injects `SRM_USER:
+    // ${SRM_USER:-}`, i.e. an empty string (not unset) when the host var is
     // absent — `??` would keep "" and log in with account="". Fall back (and
     // trim) so the dedicated-admin default actually applies in the Docker path.
-    user: process.env.ROUTER_USER?.trim() || "claude-mcp",
-    // Same empty-string hardening as ROUTER_USER: `${ROUTER_OP_ITEM:-}` in the
+    user: process.env.SRM_USER?.trim() || "claude-mcp",
+    // Same empty-string hardening as SRM_USER: `${SRM_OP_ITEM:-}` in the
     // compose injects "" (not unset) when the host var is absent; optional()'s
     // `??` would keep it and build `op://vault//field`. Trim + fall back.
-    opItem: process.env.ROUTER_OP_ITEM?.trim() || "Synology SRM - claude-mcp",
+    opItem: process.env.SRM_OP_ITEM?.trim() || "Synology SRM - claude-mcp",
   };
 }
 

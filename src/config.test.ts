@@ -1,6 +1,6 @@
 /**
  * Config parsing — the router-target edge a NAS deploy can silently hit.
- * Container Manager injects `ROUTER_USER: ${ROUTER_USER:-}` — an *empty string*,
+ * Container Manager injects `SRM_USER: ${SRM_USER:-}` — an *empty string*,
  * not unset — when the host var is absent. optional()'s `??` would keep "" and
  * log into SRM with account="", so parseRouter must fall back to the dedicated
  * `claude-mcp` admin instead.
@@ -30,34 +30,34 @@ function withEnv(env: Record<string, string | undefined>, fn: () => void): void 
 }
 
 const BASE = { DSM_BASE_URL: "https://nas.test:5001", DSM_OP_VAULT: "TestVault" };
-const ROUTER = { ...BASE, ROUTER_BASE_URL: "https://router.test:8001" };
+const ROUTER = { ...BASE, SRM_BASE_URL: "https://router.test:8001" };
 
-test("router: empty ROUTER_USER (compose ${ROUTER_USER:-}) falls back to claude-mcp", () => {
-  withEnv({ ...ROUTER, ROUTER_USER: "" }, () => {
+test("router: empty SRM_USER (compose ${SRM_USER:-}) falls back to claude-mcp", () => {
+  withEnv({ ...ROUTER, SRM_USER: "" }, () => {
     assert.equal(loadConfig().router?.user, "claude-mcp");
   });
 });
 
-test("router: whitespace-only ROUTER_USER falls back to claude-mcp", () => {
-  withEnv({ ...ROUTER, ROUTER_USER: "   " }, () => {
+test("router: whitespace-only SRM_USER falls back to claude-mcp", () => {
+  withEnv({ ...ROUTER, SRM_USER: "   " }, () => {
     assert.equal(loadConfig().router?.user, "claude-mcp");
   });
 });
 
-test("router: unset ROUTER_USER falls back to claude-mcp", () => {
-  withEnv({ ...ROUTER, ROUTER_USER: undefined }, () => {
+test("router: unset SRM_USER falls back to claude-mcp", () => {
+  withEnv({ ...ROUTER, SRM_USER: undefined }, () => {
     assert.equal(loadConfig().router?.user, "claude-mcp");
   });
 });
 
-test("router: an explicit ROUTER_USER is honoured", () => {
-  withEnv({ ...ROUTER, ROUTER_USER: "srm-admin" }, () => {
+test("router: an explicit SRM_USER is honoured", () => {
+  withEnv({ ...ROUTER, SRM_USER: "srm-admin" }, () => {
     assert.equal(loadConfig().router?.user, "srm-admin");
   });
 });
 
-test("no ROUTER_BASE_URL ⇒ router disabled (NAS-only back-compat)", () => {
-  withEnv({ ...BASE, ROUTER_BASE_URL: undefined, ROUTER_USER: "" }, () => {
+test("no SRM_BASE_URL ⇒ router disabled (NAS-only back-compat)", () => {
+  withEnv({ ...BASE, SRM_BASE_URL: undefined, SRM_USER: "" }, () => {
     assert.equal(loadConfig().router, null);
   });
 });

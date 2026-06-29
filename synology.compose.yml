@@ -39,8 +39,8 @@ services:
       MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1,null}
       TLS_REJECT_UNAUTHORIZED: ${TLS_REJECT_UNAUTHORIZED:-0}
       # Optional router (SRM) target — unset = NAS-only.
-      ROUTER_BASE_URL: ${ROUTER_BASE_URL:-}
-      ROUTER_USER: ${ROUTER_USER:-}
-      ROUTER_OP_ITEM: ${ROUTER_OP_ITEM:-Synology SRM - claude-mcp}
+      SRM_BASE_URL: ${SRM_BASE_URL:-}
+      SRM_USER: ${SRM_USER:-}
+      SRM_OP_ITEM: ${SRM_OP_ITEM:-Synology SRM - claude-mcp}
     volumes:
       - ./audit:/audit
