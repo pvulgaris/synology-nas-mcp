@@ -61,15 +61,19 @@ function pkgToUpdates(
   device: "nas" | "router",
   pending: ReadonlyArray<Record<string, unknown>>
 ): ComponentUpdate[] {
-  return pending.map((p) => ({
-    device,
-    component: "package" as const,
-    id: String(p.id),
-    name: String(p.name),
-    installed_version: p.installed_version == null ? null : String(p.installed_version),
-    available_version: String(p.available_version),
-    changelog: typeof p.changelog === "string" ? p.changelog : undefined,
-  }));
+  return pending
+    // A pending package with no target version isn't actionable — drop it rather
+    // than coercing undefined into the literal string "undefined" in the digest.
+    .filter((p) => p.available_version != null && p.available_version !== "")
+    .map((p) => ({
+      device,
+      component: "package" as const,
+      id: String(p.id),
+      name: String(p.name),
+      installed_version: p.installed_version == null ? null : String(p.installed_version),
+      available_version: String(p.available_version),
+      changelog: typeof p.changelog === "string" ? p.changelog : undefined,
+    }));
 }
 
 /** Run one source's check, catching any failure into a SourceResult so a single
@@ -93,18 +97,20 @@ export async function synologyUpdateDigest(
   router: DsmClient | null
 ): Promise<UpdateDigest> {
   const tasks: Promise<SourceResult>[] = [
-    runSource("nas_os", async () => ({
-      updates: osToUpdates("nas", "DSM", "DSM", await nasDsmOsCheckUpdate(dsm)),
-    })),
+    runSource("nas_os", async () => {
+      const st = await nasDsmOsCheckUpdate(dsm);
+      return { updates: osToUpdates("nas", "DSM", "DSM", st), note: st.warning };
+    }),
     runSource("nas_packages", async () => ({
       updates: pkgToUpdates("nas", (await nasPackagesCheckUpdates(dsm)).pending),
     })),
   ];
   if (router) {
     tasks.push(
-      runSource("router_os", async () => ({
-        updates: osToUpdates("router", "SRM", "SRM (router)", await routerSrmOsCheckUpdate(router)),
-      })),
+      runSource("router_os", async () => {
+        const st = await routerSrmOsCheckUpdate(router);
+        return { updates: osToUpdates("router", "SRM", "SRM (router)", st), note: st.warning };
+      }),
       runSource("router_packages", async () => {
         const { pending, note } = await routerPackagesCheckUpdates(router);
         return { updates: pkgToUpdates("router", pending), note };

@@ -64,12 +64,16 @@ test("mapOsUpdate: available flag but no named version ⇒ not available (silenc
   const o = mapOsUpdate({ available: true }, "DSM 7.2.2-72806");
   assert.equal(o.available, false);
   assert.equal(o.available_version, null);
+  // ...but the parse-miss is surfaced — this warning is the standing-in observability
+  // for a live HAR: an availability flag with no version means a shape change.
+  assert.match(o.warning ?? "", /no version parsed/);
 });
 
 test("mapOsUpdate: not-available response ⇒ false, null version", () => {
   const o = mapOsUpdate({ available: false, version: "" }, "DSM 7.2.2-72806");
   assert.equal(o.available, false);
   assert.equal(o.available_version, null);
+  assert.equal(o.warning, undefined); // genuinely up to date — no anomaly to flag
 });
 
 test("mapOsUpdate: null/empty check degrades, keeps current from the arg", () => {

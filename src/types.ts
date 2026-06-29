@@ -15,6 +15,11 @@ export interface OsUpdateStatus {
   changelog_url: string | null;
   /** DSM/SRM's own status enum, passed through for debugging. */
   raw_status: string | null;
+  /** Set when the upgrade-check response couldn't be fully parsed — the server
+   *  flagged an update available but no version field matched (likely a
+   *  response-shape mismatch), or the current-version read failed. Surfaced so a
+   *  parse problem is visible instead of silently reading as "up to date". */
+  warning?: string;
 }
 
 /** One pending update — an OS bump or a package bump, on the NAS or the router. */
@@ -75,7 +80,7 @@ export function mapOsUpdate(check: any, currentVersion: string | null): OsUpdate
   // "checking"/transient false-positive that erodes trust (we bias to silence).
   const available = availableFlag && !!availVer;
   const reboot_required = coerceBool(u.reboot ?? u.restart);
-  return {
+  const status: OsUpdateStatus = {
     current_version: currentVersion ?? (typeof check?.current?.version === "string" ? check.current.version : null),
     available,
     available_version: available ? availVer : null,
@@ -84,4 +89,11 @@ export function mapOsUpdate(check: any, currentVersion: string | null): OsUpdate
       (typeof u.url === "string" && u.url) || (typeof u.link === "string" && u.link) || null,
     raw_status: typeof u.status === "string" ? u.status : null,
   };
+  // Server said an update is available but named no version we could parse — the
+  // bias-to-silence above keeps `available:false`, but flag it so a real update
+  // masked by a response-shape change is visible rather than silently swallowed.
+  if (availableFlag && !availVer) {
+    status.warning = "upgrade-check flagged available but no version parsed";
+  }
+  return status;
 }

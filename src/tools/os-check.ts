@@ -11,8 +11,8 @@
  *
  * Lives in its own module (not updates.ts) because updates.ts imports router.ts
  * for the digest — a shared helper there would close an updates↔router import
- * cycle. System.info is read defensively (.catch → null) so a missing current
- * version degrades to null rather than failing the whole check.
+ * cycle. System.info is read defensively (.catch) so a failed current-version
+ * read degrades to a warning on the result rather than failing the whole check.
  */
 
 import type { DsmClient } from "../dsm.js";
@@ -22,11 +22,19 @@ export async function osCheckUpdate(
   client: DsmClient,
   systemInfoVersion: number
 ): Promise<OsUpdateStatus> {
+  const INFO_FAILED = Symbol("info_failed");
   const [info, check] = await Promise.all([
     client
       .call<any>({ api: "SYNO.Core.System", method: "info", version: systemInfoVersion })
-      .catch(() => null),
+      .catch(() => INFO_FAILED),
     client.call<any>({ api: "SYNO.Core.Upgrade.Server", method: "check", version: 1 }),
   ]);
-  return mapOsUpdate(check, info?.firmware_ver ?? null);
+  const infoFailed = info === INFO_FAILED;
+  const status = mapOsUpdate(check, infoFailed ? null : ((info as any)?.firmware_ver ?? null));
+  if (infoFailed) {
+    // Distinguish a failed System.info read from a genuinely-absent version so
+    // current_version:null isn't reported as if the current version were known.
+    status.warning = [status.warning, "current-version read failed"].filter(Boolean).join("; ");
+  }
+  return status;
 }

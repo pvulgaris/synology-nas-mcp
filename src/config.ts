@@ -120,7 +120,10 @@ function parseRouter(): RouterTarget | null {
     // absent — `??` would keep "" and log in with account="". Fall back (and
     // trim) so the dedicated-admin default actually applies in the Docker path.
     user: process.env.ROUTER_USER?.trim() || "claude-mcp",
-    opItem: optional("ROUTER_OP_ITEM", "Synology SRM - claude-mcp"),
+    // Same empty-string hardening as ROUTER_USER: `${ROUTER_OP_ITEM:-}` in the
+    // compose injects "" (not unset) when the host var is absent; optional()'s
+    // `??` would keep it and build `op://vault//field`. Trim + fall back.
+    opItem: process.env.ROUTER_OP_ITEM?.trim() || "Synology SRM - claude-mcp",
   };
 }
 

@@ -91,7 +91,7 @@ test("router OS: maps the live SRM update shape (1.3.1 → 1.3.2)", async () => 
 
 test("router OS: System.info failure degrades current_version to null, still reports availability", async () => {
   const router = fakeClient({
-    // The .catch(() => null) in routerSrmOsCheckUpdate must absorb this.
+    // The .catch in routerSrmOsCheckUpdate must absorb this into a warning.
     "SYNO.Core.System.info": () => { throw new Error("code 104"); },
     "SYNO.Core.Upgrade.Server.check": () => ({ available: false }),
   });
@@ -100,4 +100,7 @@ test("router OS: System.info failure degrades current_version to null, still rep
 
   assert.equal(o.current_version, null);
   assert.equal(o.available, false);
+  // A null current_version from a *failed* read must be distinguishable from a
+  // genuinely-absent one, so the digest doesn't present it as known.
+  assert.match(o.warning ?? "", /current-version read failed/);
 });
