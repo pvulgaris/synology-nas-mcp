@@ -292,3 +292,48 @@ test("nas_package_info: dname-less row falls back to id, never undefined", async
   const res = (await nasPackageInfo(makeNamelessCatalogFake(), { name: "MariaDB10" })) as any;
   assert.equal(res.name, "MariaDB10");
 });
+
+// Regression (T2): dsm.ts bounds every call with a 30s AbortSignal.timeout, whose
+// rejection is a TimeoutError — its message matches none of the network patterns.
+// A slow-but-successful commit must still degrade to the Package.list poll, not
+// hard-fail. The fake marks the package installed (server-side success) and THEN
+// throws a TimeoutError from the commit, exactly as an aborted-yet-completed call.
+test("install: a TimeoutError mid-commit degrades to the version-flip poll", { timeout: 3000 }, async () => {
+  const installed = new Set<string>();
+  let pendingId = "";
+  const call = async (opts: DsmCallOptions): Promise<unknown> => {
+    switch (`${opts.api}.${opts.method}`) {
+      case "SYNO.Core.Package.list":
+        return { packages: [...installed].map((id) => ({ id, name: id, version: "1.0.0-1000", additional: { status: "running" } })) };
+      case "SYNO.Core.Package.Server.list":
+        return { packages: CATALOG };
+      case "SYNO.Core.Package.feasibility_check":
+        return {};
+      case "SYNO.Core.Package.Installation.get_queue":
+        return { queue: [{ pkg: "TextEditor" }], broken_pkgs: [], conflicted_pkgs: [], non_exist_pkgs: [], paused_pkgs: [] };
+      case "SYNO.Core.Package.Installation.check":
+        return { volume_list: [{ mount_point: "/volume1" }] };
+      case "SYNO.Core.Package.Installation.install":
+        if ((opts.params ?? {}).installrunpackage !== undefined) {
+          installed.add(pendingId); // server-side commit succeeds...
+          const e = new Error("The operation was aborted due to timeout");
+          e.name = "TimeoutError"; // ...but the client's 30s bound aborts first
+          throw e;
+        }
+        pendingId = JSON.parse(String((opts.params ?? {}).name));
+        return { taskid: `@SYNOPKG_DOWNLOAD_${pendingId}` };
+      case "SYNO.Core.Package.Installation.status":
+        return { finished: true, success: true, status: "installing" };
+      case "SYNO.Core.Package.Installation.Download.check":
+        return { filename: `/volume1/@tmp/synopkg/download/${pendingId}` };
+      case "SYNO.Core.Package.Installation.delete":
+        return {};
+      default:
+        throw new Error(`unexpected DSM call: ${opts.api}.${opts.method}`);
+    }
+  };
+  const dsm = { call } as unknown as SynoClient;
+  const res = (await nasPackageInstall(cfg, dsm, { name: "TextEditor" })) as any;
+  assert.equal(res.verified, true);
+  assert.equal(res.after.version, "1.0.0-1000");
+});
