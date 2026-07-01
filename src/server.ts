@@ -11,7 +11,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Config } from "./config.js";
 import type { SynoClient } from "./dsm.js";
-import { SERVER_INSTRUCTIONS } from "./instructions.js";
+import { serverInstructions } from "./instructions.js";
 import { VERSION } from "./version.js";
 import { nasStatus, nasStorageHealth } from "./tools/system.js";
 import {
@@ -69,7 +69,7 @@ export function createServer(
 ): McpServer {
   const server = new McpServer(
     { name: "synology-nas-mcp", version: VERSION },
-    { instructions: SERVER_INSTRUCTIONS }
+    { instructions: serverInstructions(router !== null) }
   );
 
   // ── Read tools — free to invoke ───────────────────────────────────────────
