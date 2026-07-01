@@ -36,6 +36,18 @@ The biggest footgun: where `additional[]` keys appear in the response varies by 
 
 Always probe with `DEBUG_DSM_RESPONSES=1` and look at the raw shape before mapping fields.
 
+**`SYNO.Core.Package.Server.list` (the catalog, not the installed-package list) uses its own field
+names, not the ones you'd guess from `Package.list` or the Package Center UI's labels:** display
+name is `dname` (not `name`), publisher is `maintainer` (not `publisher`), description is `desc`
+(not `description`), and dependencies are `deppkgs` (a `{pkgId: versionConstraint}` map or `null`
+— not `depend_packages`). There is no `install_dep_packages` field on this endpoint at all;
+`Installation.get_queue` is the resolved-plan source of truth (see the write-flow section in
+CLAUDE.md). `nas_package_info` and `nas_packages_check_updates` shipped for a while silently
+mapping the wrong keys — `JSON.stringify` drops `undefined` fields, so the gap only surfaced via a
+live smoke test, not a type error (`dsm.call<T>()` performs an unchecked cast, so a wrong field
+name in the TS interface never fails at compile time). `changelog`, `size`, and `beta` happen to be
+named the same on both endpoints, which is what let the bug hide for the fields that did work.
+
 ## API name + method discoveries
 
 These took multiple sessions to pin down:
