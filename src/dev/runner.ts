@@ -12,6 +12,7 @@
  * Subcommands:
  *   list                      — installed packages, condensed
  *   pending                   — packages with updates available
+ *   info <name>               — nas_package_info tool output (name/publisher/etc.)
  *   catalog <name>            — full catalog entry (link/md5/size)
  *   update <name>             — run the production upgrade flow end-to-end
  *   raw <api> <method> [k=v…] — one-shot DSM call (GET); add `--post` to POST.
@@ -30,6 +31,7 @@ import { SynoClient } from "../dsm.js";
 import {
   nasPackagesList,
   nasPackagesCheckUpdates,
+  nasPackageInfo,
   nasPackageUpdate,
 } from "../tools/packages.js";
 import { deploy } from "./deploy.js";
@@ -90,6 +92,13 @@ async function main() {
     case "pending": {
       const r = await nasPackagesCheckUpdates(dsm);
       console.log(JSON.stringify(r, null, 2));
+      break;
+    }
+    case "info": {
+      const name = rest[0];
+      if (!name) throw new Error("info: usage: info <name>");
+      const out = await nasPackageInfo(dsm, { name });
+      console.log(JSON.stringify(out, null, 2));
       break;
     }
     case "catalog": {
@@ -183,7 +192,7 @@ async function main() {
       break;
     }
     default:
-      console.error(`unknown subcommand: ${cmd}. Try one of: list, pending, catalog, update, raw, json, deploy.`);
+      console.error(`unknown subcommand: ${cmd}. Try one of: list, pending, info, catalog, update, raw, json, deploy.`);
       process.exit(2);
   }
 }
