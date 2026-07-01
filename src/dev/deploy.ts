@@ -30,7 +30,7 @@ import { loadCredentials } from "../auth.js";
 
 const execFileP = promisify(execFile);
 
-const PROJECT_NAME_DEFAULT = "synology-nas-mcp";
+const PROJECT_NAME_DEFAULT = "synology-mcp";
 const HEALTH_PORT_DEFAULT = 8765;
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 120_000;

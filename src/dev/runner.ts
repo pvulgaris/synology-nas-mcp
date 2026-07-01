@@ -20,7 +20,7 @@
  *   deploy [--tar=<path>] [--project=<name>]
  *                             — upload tar → import image → rebuild Compose
  *                               project → poll /health. Defaults: tar at
- *                               ~/Downloads/synology-nas-mcp-<version>.tar,
+ *                               ~/Downloads/synology-mcp-<version>.tar,
  *                               project 'synology-nas-mcp'.
  *
  * The point of `raw` is iteration: try `Installation.upgrade` with different
@@ -141,7 +141,7 @@ async function main() {
         throw new Error(`deploy: unknown flag "${tok}"`);
       }
       if (!tar) {
-        // Default: ~/Downloads/synology-nas-mcp-<version>.tar
+        // Default: ~/Downloads/synology-mcp-<version>.tar
         const { readFile } = await import("node:fs/promises");
         const { join } = await import("node:path");
         const home = process.env.HOME!;
@@ -151,7 +151,7 @@ async function main() {
             "utf8"
           )
         );
-        tar = join(home, "Downloads", `synology-nas-mcp-${pkg.version}.tar`);
+        tar = join(home, "Downloads", `synology-mcp-${pkg.version}.tar`);
       }
       const out = await deploy(cfg, { tar, project });
       console.log(JSON.stringify(out, null, 2));

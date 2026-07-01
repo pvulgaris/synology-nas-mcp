@@ -36,16 +36,36 @@ A small MCP server that exposes a typed subset of the Synology DSM 7 Web API (pa
 
 `docs/SETUP.md` covers first-time install. For incremental development:
 
+Builds use Apple `container` + `skopeo` (NOT Colima/Docker — that toolchain is
+retired here; the `container` system service is always running). The DS224+ is
+Intel, so the image must be `linux/amd64`.
+
 ```sh
-# On the Mac (Colima or Docker Desktop running for cross-arch builds):
 cd <repo>
-docker build --platform linux/amd64 \
-  -t synology-nas-mcp:<ver> -t synology-nas-mcp:latest .
-docker save synology-nas-mcp:<ver> synology-nas-mcp:latest \
-  -o ~/Downloads/synology-nas-mcp-<ver>.tar
+
+# 1. Cross-arch build (amd64-on-arm64 via `container`).
+container build --platform linux/amd64 -t synology-mcp:<ver> .
+
+# 2. Export to an OCI archive, then convert to a docker-archive DSM can import.
+container image save --platform linux/amd64 synology-mcp:<ver> -o /tmp/oci.tar
+skopeo copy --override-os linux --override-arch amd64 \
+  oci-archive:/tmp/oci.tar \
+  docker-archive:~/Downloads/synology-mcp-<ver>.tar:synology-mcp:latest
+
+# 3. GOTCHA — rewrite the archive's tag to the BARE image name before importing.
+#    skopeo writes the RepoTag fully-qualified (docker.io/library/synology-mcp:latest)
+#    in both manifest.json AND the legacy `repositories` file. DSM imports that as a
+#    DISTINCT image and never reassigns the bare `synology-mcp:latest` tag the Compose
+#    project actually pulls — so the container silently keeps the OLD image and /health
+#    never flips (this cost a full debugging session once). Extract → edit → re-tar:
+#      manifest.json[0].RepoTags = ["synology-mcp:<ver>", "synology-mcp:latest"]
+#      repositories              = {"synology-mcp": { ...same inner... }}
+#    The image name MUST be `synology-mcp` (what synology.compose.yml's `image:` pulls
+#    and what the live Container Manager project expects) — NOT the GitHub repo name
+#    `synology-nas-mcp`.
 
 source dev/source-creds.sh   # once per shell; reads creds from 1Password via op
-npm run deploy                # ~30s: upload+import+stop+build+start+/health-verify
+npm run deploy                # upload+import+build(recreates from new :latest)+/health-verify
 ```
 
 `npm run deploy` (`src/dev/deploy.ts`) uses two DSM Web API quirks that aren't in any public doc:
@@ -55,7 +75,7 @@ npm run deploy                # ~30s: upload+import+stop+build+start+/health-ver
 
 Both reverse-engineered from a DevTools HAR capture.
 
-When bumping the version, only update `package.json` — `src/version.ts` reads it at startup and both `server.ts` and `http.ts` import the constant. The docker tag in the build command is just the human-facing label; nothing depends on it matching.
+When bumping the version, only update `package.json` — `src/version.ts` reads it at startup and both `server.ts` and `http.ts` import the constant, and it flows through to `/health` (which is what `npm run deploy` verifies, so a bump is what makes the post-deploy health check meaningful rather than a no-op against the already-running version). The `:<ver>` image tag is a human label; the `:latest` tag is what the Compose project pulls. The image **name** (`synology-mcp`) is load-bearing — it must match `synology.compose.yml`'s `image:` (see the bare-tag gotcha above). The Compose project on the NAS is also named `synology-mcp`; `src/dev/deploy.ts`'s `PROJECT_NAME_DEFAULT` matches it, so `npm run deploy` needs no `--project` flag.
 
 ## Write flow: install & update (two-phase, download then install-from-path)
 

@@ -17,8 +17,8 @@
 
 services:
   synology-nas-mcp:
-    image: synology-nas-mcp:latest
-    container_name: synology-nas-mcp
+    image: synology-mcp:latest
+    container_name: synology-mcp
     restart: unless-stopped
     network_mode: host
     # Defense in depth — the daemon runs as `node` (uid 1000) inside the
