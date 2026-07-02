@@ -16,7 +16,12 @@ import path from "node:path";
 import { mkdtempSync } from "node:fs";
 import type { Config } from "../config.js";
 import type { DsmClient, DsmCallOptions } from "../dsm.js";
-import { nasPackageInstall, nasPackageUninstall } from "./packages.js";
+import {
+  nasPackageInstall,
+  nasPackageUninstall,
+  nasPackageInfo,
+  nasPackagesCheckUpdates,
+} from "./packages.js";
 
 // Force the audit write to a throwaway local file (never the remote POST).
 delete process.env.MCP_AUDIT_URL;
@@ -24,10 +29,30 @@ const cfg = {
   auditLogDir: mkdtempSync(path.join(os.tmpdir(), "synmcp-test-")),
 } as unknown as Config;
 
+// Field names mirror the real HAR-verified SYNO.Core.Package.Server.list
+// shape: display name is `dname` (not `name`), publisher is `maintainer`
+// (not `publisher`), description is `desc` (not `description`), and
+// dependencies are `deppkgs` (not `depend_packages`).
 const CATALOG = [
-  { id: "TextEditor", name: "Text Editor", version: "1.0.0-1000", link: "http://x/te.spk", md5: "t", size: 1000, source: "syno", beta: false, install_type: "", install_on_cold_storage: false },
-  { id: "UniversalViewer", name: "Universal Viewer", version: "1.4.0-0712", link: "http://x/uv.spk", md5: "u", size: 16069888, source: "syno", beta: false, install_type: "", install_on_cold_storage: true },
-  { id: "SynologyDrive", name: "Synology Drive Server", version: "4.0.3-27892", link: "http://x/sd.spk", md5: "s", size: 37974657, source: "syno", beta: false, install_type: "", install_on_cold_storage: true },
+  { id: "TextEditor", dname: "Text Editor", version: "1.0.0-1000", link: "http://x/te.spk", md5: "t", size: 1000, source: "syno", beta: false, install_type: "", install_on_cold_storage: false },
+  { id: "UniversalViewer", dname: "Universal Viewer", version: "1.4.0-0712", link: "http://x/uv.spk", md5: "u", size: 16069888, source: "syno", beta: false, install_type: "", install_on_cold_storage: true },
+  { id: "SynologyDrive", dname: "Synology Drive Server", version: "4.0.3-27892", link: "http://x/sd.spk", md5: "s", size: 37974657, source: "syno", beta: false, install_type: "", install_on_cold_storage: true },
+  {
+    id: "Tailscale",
+    dname: "Tailscale",
+    version: "1.58.2-700058002",
+    link: "http://x/ts.spk",
+    md5: "z",
+    size: 26220613,
+    source: "syno",
+    beta: false,
+    install_type: "",
+    install_on_cold_storage: false,
+    maintainer: "Tailscale, Inc.",
+    desc: "Connect all your devices using WireGuard, without the hassle.",
+    changelog: "",
+    deppkgs: null,
+  },
 ];
 
 interface Recorded {
@@ -44,7 +69,7 @@ function makeFake(queue: Array<{ pkg: string }>) {
   let pendingId = "";
   const pkgObj = (id: string) => {
     const c = CATALOG.find((x) => x.id === id)!;
-    return { id, name: c.name, version: c.version, additional: { status: "running", install_type: "", startable: true } };
+    return { id, name: c.dname, version: c.version, additional: { status: "running", install_type: "", startable: true } };
   };
   const call = async (opts: DsmCallOptions): Promise<unknown> => {
     const params = (opts.params ?? {}) as Record<string, unknown>;
@@ -198,4 +223,44 @@ test("no-data package: uninstalls directly without gating", { timeout: 3000 }, a
   assert.equal(res.removed, true);
   assert.equal(res.had_data_dialog, false);
   assert.equal(isPresent(), false);
+});
+
+// ── Catalog field mapping (regression: DSM names these dname/maintainer/desc/
+// deppkgs, not name/publisher/description/depend_packages — a live smoke test
+// against production caught nas_package_info silently dropping these fields) ─
+
+function makeCatalogFake() {
+  const call = async (opts: DsmCallOptions): Promise<unknown> => {
+    if (opts.api === "SYNO.Core.Package.Server" && opts.method === "list") {
+      return { packages: CATALOG };
+    }
+    if (opts.api === "SYNO.Core.Package" && opts.method === "list") {
+      return { packages: [{ id: "Tailscale", version: "1.58.2-700058000" }] };
+    }
+    throw new Error(`unexpected DSM call: ${opts.api}.${opts.method}`);
+  };
+  return { call } as unknown as DsmClient;
+}
+
+test("nas_package_info: surfaces name/publisher/description/dependencies from the real dname/maintainer/desc/deppkgs fields", async () => {
+  const dsm = makeCatalogFake();
+  const res = (await nasPackageInfo(dsm, { name: "Tailscale" })) as any;
+  assert.equal(res.name, "Tailscale");
+  assert.equal(res.publisher, "Tailscale, Inc.");
+  assert.equal(res.description, "Connect all your devices using WireGuard, without the hassle.");
+  assert.equal(res.dependencies, null);
+});
+
+test("nas_package_info: matches by display name (dname), not just id", async () => {
+  const dsm = makeCatalogFake();
+  const res = (await nasPackageInfo(dsm, { name: "Universal Viewer" })) as any;
+  assert.equal(res.id, "UniversalViewer");
+});
+
+test("nas_packages_check_updates: pending entries carry the real display name", async () => {
+  const dsm = makeCatalogFake();
+  const res = await nasPackagesCheckUpdates(dsm);
+  assert.deepEqual(res.pending, [
+    { id: "Tailscale", name: "Tailscale", installed_version: "1.58.2-700058000", available_version: "1.58.2-700058002", changelog: "", beta: false },
+  ]);
 });

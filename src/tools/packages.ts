@@ -108,7 +108,6 @@ interface InstalledPackage {
 
 interface CatalogPackage {
   id: string;
-  name: string;
   version: string;
   link?: string;
   md5?: string;
@@ -117,11 +116,19 @@ interface CatalogPackage {
   beta?: boolean;
   install_type?: string;
   install_on_cold_storage?: boolean;
-  publisher?: string;
-  description?: string;
   changelog?: string;
-  depend_packages?: unknown;
-  install_dep_packages?: unknown;
+  /** Display name — HAR-verified 2026-07-01: this API names it `dname`, not
+   *  `name` (that's `SYNO.Core.Package.list`'s field, a different endpoint). */
+  dname?: string;
+  /** Publisher — HAR-verified: `maintainer`, not `publisher`. */
+  maintainer?: string;
+  /** Description — HAR-verified: `desc`, not `description`. */
+  desc?: string;
+  /** Dependency map (`{pkgId: versionConstraint}` or null) — HAR-verified:
+   *  `deppkgs`, not `depend_packages`. No `install_dep_packages` field exists
+   *  on this endpoint at all; `Installation.get_queue` is the source of truth
+   *  for the resolved install plan (see the write-flow doc comment above). */
+  deppkgs?: unknown;
 }
 
 interface PackageListResp {
@@ -224,7 +231,7 @@ export async function nasPackagesCheckUpdates(dsm: DsmClient) {
     if (installedVersion === p.version) continue;
     pending.push({
       id: p.id,
-      name: p.name,
+      name: p.dname,
       installed_version: installedVersion,
       available_version: p.version,
       changelog: p.changelog,
@@ -250,7 +257,7 @@ export async function nasPackageInfo(
     params: { tab: "all" },
   });
   const pkg = (data?.packages ?? []).find(
-    (p) => p.id === args.name || p.name === args.name
+    (p) => p.id === args.name || p.dname === args.name
   );
   if (!pkg) {
     throw new Error(
@@ -259,13 +266,12 @@ export async function nasPackageInfo(
   }
   return {
     id: pkg.id,
-    name: pkg.name,
+    name: pkg.dname,
     version: pkg.version,
-    publisher: pkg.publisher,
-    description: pkg.description,
+    publisher: pkg.maintainer,
+    description: pkg.desc,
     changelog: pkg.changelog,
-    dependencies: pkg.depend_packages,
-    install_dep_packages: pkg.install_dep_packages,
+    dependencies: pkg.deppkgs,
     size: pkg.size,
     beta: pkg.beta,
   };
@@ -306,7 +312,7 @@ async function findInCatalog(
     params: { tab: "all" },
   });
   const pkg = (data?.packages ?? []).find(
-    (p) => p.id === packageId || p.name === packageId
+    (p) => p.id === packageId || p.dname === packageId
   );
   if (!pkg) {
     throw new Error(
@@ -320,7 +326,7 @@ async function findInCatalog(
   }
   return {
     id: pkg.id,
-    name: pkg.name,
+    name: pkg.dname ?? pkg.id,
     version: pkg.version,
     link: pkg.link,
     md5: pkg.md5,
