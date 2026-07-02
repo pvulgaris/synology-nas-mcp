@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * synology-nas-mcp — entry point.
+ * synology-mcp — entry point.
  *
  * Subcommands:
  *   serve         Run MCP over stdio (for `claude mcp add` / claude.json or local dev).
@@ -39,7 +39,7 @@ async function serveStdio() {
   const server = createServer(cfg, dsm, router);
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[serve] synology-nas-mcp ready on stdio");
+  console.error("[serve] synology-mcp ready on stdio");
 }
 
 async function serveHttp() {

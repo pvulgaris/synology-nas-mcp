@@ -1,4 +1,4 @@
-# synology-nas-mcp container.
+# synology-mcp container.
 #
 # Runs the MCP server over Streamable HTTP, bound to a specific interface
 # (default: tailscale0's IPv4 — Container Manager's host-network mode shares

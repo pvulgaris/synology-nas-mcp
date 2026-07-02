@@ -21,7 +21,7 @@
  *                             — upload tar → import image → rebuild Compose
  *                               project → poll /health. Defaults: tar at
  *                               ~/Downloads/synology-mcp-<version>.tar,
- *                               project 'synology-nas-mcp'.
+ *                               project 'synology-mcp'.
  *
  * The point of `raw` is iteration: try `Installation.upgrade` with different
  * param combos until 4501 goes away, without rebuilding anything.

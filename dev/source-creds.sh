@@ -30,13 +30,13 @@ unset OP_SERVICE_ACCOUNT_TOKEN
 : "${DSM_USER:=claude-mcp}"
 # Local audit fallback (used only when MCP_AUDIT_URL is unset); the canonical
 # log lives on the NAS via the daemon's POST /audit endpoint.
-: "${AUDIT_LOG_DIR:=$HOME/.cache/synology-nas-mcp/audit}"
+: "${AUDIT_LOG_DIR:=$HOME/.cache/synology-mcp/audit}"
 : "${MCP_AUDIT_URL:=http://nas.local:8765/audit}"
 # Persist the DSM SID across tsx runs so we don't burn a TOTP code each process
 # (DSM rejects TOTP reuse within the 30s window with code 404). NAS only — the
 # router (SRM) deliberately gets no SID cache; SRM expires sessions faster than
 # the client TTL, so a cached SID goes stale (119 → TOTP-reuse 404).
-: "${DSM_SID_CACHE_FILE:=$HOME/.cache/synology-nas-mcp/sid.json}"
+: "${DSM_SID_CACHE_FILE:=$HOME/.cache/synology-mcp/sid.json}"
 export DSM_OP_VAULT DSM_OP_ITEM DSM_BASE_URL DSM_USER \
        AUDIT_LOG_DIR MCP_AUDIT_URL DSM_SID_CACHE_FILE
 # Cache dir holds the SID + audit log — keep it owner-only.

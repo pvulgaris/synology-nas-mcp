@@ -68,7 +68,7 @@ export function createServer(
   router: SynoClient | null
 ): McpServer {
   const server = new McpServer(
-    { name: "synology-nas-mcp", version: VERSION },
+    { name: "synology-mcp", version: VERSION },
     { instructions: serverInstructions(router !== null) }
   );
 

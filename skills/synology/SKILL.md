@@ -1,6 +1,6 @@
 ---
 name: synology
-description: Manage a Synology NAS (DSM 7) — packages, security audit, shares — via the synology-nas-mcp server. Use when the user asks about NAS status, package updates / research / installation / removal, or security posture.
+description: Manage a Synology NAS (DSM 7) — packages, security audit, shares — via the synology-mcp server. Use when the user asks about NAS status, package updates / research / installation / removal, or security posture.
 ---
 
 # Synology NAS
@@ -84,7 +84,7 @@ The user maintains a `protect:` list of packages that must never be offered for 
 
 ## Audit log
 
-Every write is logged to `/volume1/docker/synology-nas-mcp/audit/YYYY-MM.jsonl` on the NAS, with timestamp, tool, args, before/after state, ok flag, and error message if any. Surface this path when the user asks "what did Claude do?" — they can read it themselves.
+Every write is logged to `/volume1/docker/synology-mcp/audit/YYYY-MM.jsonl` on the NAS, with timestamp, tool, args, before/after state, ok flag, and error message if any. Surface this path when the user asks "what did Claude do?" — they can read it themselves.
 
 
 ## Composition examples (do not script — Claude composes)

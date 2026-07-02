@@ -1,4 +1,4 @@
-# CLAUDE.md — synology-nas-mcp
+# CLAUDE.md — synology-mcp
 
 Onboarding for a future Claude session (or any human collaborator). What's here that you can't easily get from the README, source files, or `git log`.
 
@@ -11,7 +11,7 @@ A small MCP server that exposes a typed subset of the Synology DSM 7 Web API (pa
                     │                                      │                         │
                     │  stdio (spawned per session)         │  Container Manager      │
                     ▼                                      │  ┌───────────────────┐  │
-       /opt/homebrew/bin/synology-nas-mcp bridge ───tailnet───▶│ synology-nas-mcp: │  │
+       /opt/homebrew/bin/synology-mcp bridge ───tailnet───▶│ synology-mcp: │  │
                     ▲                                      │  │   (Node.js)       │  │
                     │  HTTP + bearer                       │  │  HTTP daemon      │  │
    Claude Code ─────┘                                      │  └─────────┬─────────┘  │
@@ -30,7 +30,7 @@ A small MCP server that exposes a typed subset of the Synology DSM 7 Web API (pa
 |---|---|---|---|
 | `serve` | stdio | local dev only | `claude mcp add … -t stdio` for testing the server logic without HTTP. Rarely used. |
 | `daemon` | Streamable HTTP | NAS container | The production deploy. Reads creds via `op`, binds tailscale0, listens on :8765. |
-| `bridge` | stdio → HTTP client | the user's Mac (Claude Desktop) | Tiny proxy. Reads `MCP_BRIDGE_URL` + `MCP_BRIDGE_TOKEN` env, forwards stdio JSON-RPC to the daemon. ~40 lines. Lives at `/opt/homebrew/bin/synology-nas-mcp` after `npm install -g .` |
+| `bridge` | stdio → HTTP client | the user's Mac (Claude Desktop) | Tiny proxy. Reads `MCP_BRIDGE_URL` + `MCP_BRIDGE_TOKEN` env, forwards stdio JSON-RPC to the daemon. ~40 lines. Lives at `/opt/homebrew/bin/synology-mcp` after `npm install -g .` |
 
 ## Deploy loop (the commands you'll actually run)
 
@@ -62,7 +62,7 @@ skopeo copy --override-os linux --override-arch amd64 \
 #      repositories              = {"synology-mcp": { ...same inner... }}
 #    The image name MUST be `synology-mcp` (what synology.compose.yml's `image:` pulls
 #    and what the live Container Manager project expects) — NOT the GitHub repo name
-#    `synology-nas-mcp`.
+#    `synology-mcp`.
 
 source dev/source-creds.sh   # once per shell; reads creds from 1Password via op
 npm run deploy                # upload+import+build(recreates from new :latest)+/health-verify

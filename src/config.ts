@@ -11,7 +11,7 @@
  *   MCP_BIND_HOST         interface to bind HTTP transport (daemon mode); default: tailscale0 IP
  *   MCP_BIND_PORT         port for HTTP transport; default: 8765
  *   MCP_ALLOWED_ORIGINS   comma-separated Origin allowlist; default: localhost variants + null
- *   AUDIT_LOG_DIR         JSONL audit log directory; default: /volume1/docker/synology-nas-mcp/audit
+ *   AUDIT_LOG_DIR         JSONL audit log directory; default: /volume1/docker/synology-mcp/audit
  *   TLS_REJECT_UNAUTHORIZED  set "0" to skip cert validation for self-signed DSM certs (default: skip in dev)
  *
  * Optional — router (SRM) target, all back-compat (unset = NAS-only):
@@ -94,10 +94,10 @@ export function loadConfig(): Config {
     allowedOrigins,
     auditLogDir: optional(
       "AUDIT_LOG_DIR",
-      "/volume1/docker/synology-nas-mcp/audit"
+      "/volume1/docker/synology-mcp/audit"
     ),
     tlsSkipVerify: optional("TLS_REJECT_UNAUTHORIZED", "0") === "0",
-    session: "synology-nas-mcp",
+    session: "synology-mcp",
     authVersion: 6,
     authPath: "entry.cgi",
     sidCacheFile: process.env.DSM_SID_CACHE_FILE,

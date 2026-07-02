@@ -1,8 +1,8 @@
-# Container Manager "Project" definition for synology-nas-mcp.
+# Container Manager "Project" definition for synology-mcp.
 #
 # Deployment shape (on the NAS):
 #
-#   /volume1/docker/synology-nas-mcp/
+#   /volume1/docker/synology-mcp/
 #     ├── docker-compose.yml     (copy of this file, renamed)
 #     ├── .env                   (secrets — see .env.example; NEVER committed)
 #     └── audit/                 (bind-mounted into the container at /audit)
@@ -16,7 +16,7 @@
 # docs/SETUP.md for the one-time setup that enables it.
 
 services:
-  synology-nas-mcp:
+  synology-mcp:
     image: synology-mcp:latest
     container_name: synology-mcp
     restart: unless-stopped

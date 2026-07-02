@@ -79,7 +79,7 @@ async function loginForDeploy(
   url.searchParams.set("passwd", password);
   url.searchParams.set("otp_code", totp);
   url.searchParams.set("format", "sid");
-  url.searchParams.set("session", "synology-nas-mcp-deploy");
+  url.searchParams.set("session", "synology-mcp-deploy");
   url.searchParams.set("enable_syno_token", "yes");
   const res = await fetch(url, { method: "GET" });
   const body = (await res.json()) as any;
