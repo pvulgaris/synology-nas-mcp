@@ -10,8 +10,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Config } from "./config.js";
-import type { DsmClient } from "./dsm.js";
-import { SERVER_INSTRUCTIONS } from "./instructions.js";
+import type { SynoClient } from "./dsm.js";
+import { serverInstructions } from "./instructions.js";
 import { VERSION } from "./version.js";
 import { nasStatus, nasStorageHealth } from "./tools/system.js";
 import {
@@ -33,6 +33,8 @@ import { nasSharesList } from "./tools/shares.js";
 import { nasExternalAccess } from "./tools/external.js";
 import { nasNotifications } from "./tools/notifications.js";
 import { nasCertificates } from "./tools/certificates.js";
+import { nasDsmOsCheckUpdate, synologyUpdateDigest } from "./tools/updates.js";
+import { routerSrmOsCheckUpdate } from "./tools/router.js";
 
 function jsonContent(data: unknown) {
   return {
@@ -60,10 +62,14 @@ function safeTool<A>(fn: (args: A) => Promise<unknown>) {
   };
 }
 
-export function createServer(cfg: Config, dsm: DsmClient): McpServer {
+export function createServer(
+  cfg: Config,
+  dsm: SynoClient,
+  router: SynoClient | null
+): McpServer {
   const server = new McpServer(
-    { name: "synology-nas-mcp", version: VERSION },
-    { instructions: SERVER_INSTRUCTIONS }
+    { name: "synology-mcp", version: VERSION },
+    { instructions: serverInstructions(router !== null) }
   );
 
   // ── Read tools — free to invoke ───────────────────────────────────────────
@@ -95,6 +101,33 @@ export function createServer(cfg: Config, dsm: DsmClient): McpServer {
     {},
     safeTool(() => nasPackagesCheckUpdates(dsm))
   );
+
+  server.tool(
+    "nas_dsm_os_check_update",
+    "Whether a DSM OS update is available (read-only — does not download or apply it).",
+    {},
+    safeTool(() => nasDsmOsCheckUpdate(dsm))
+  );
+
+  server.tool(
+    "synology_update_digest",
+    "Aggregated pending updates across DSM OS, NAS packages, router OS, and router packages — one structured result. This is the Active-Insight-style cross-device update summary.",
+    {},
+    safeTool(() => synologyUpdateDigest(dsm, router))
+  );
+
+  // Router (SRM) reads — only registered when a router target is configured, so
+  // tools/list stays honest about what's actually reachable. (SRM exposes no
+  // package-update API, so there's no router-packages tool; router package state
+  // is folded into synology_update_digest as an honest note instead.)
+  if (router) {
+    server.tool(
+      "router_srm_os_check_update",
+      "Whether an SRM router OS update is available (read-only).",
+      {},
+      safeTool(() => routerSrmOsCheckUpdate(router))
+    );
+  }
 
   server.tool(
     "nas_package_info",

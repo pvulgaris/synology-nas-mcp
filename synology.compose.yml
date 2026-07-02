@@ -1,8 +1,8 @@
-# Container Manager "Project" definition for synology-nas-mcp.
+# Container Manager "Project" definition for synology-mcp.
 #
 # Deployment shape (on the NAS):
 #
-#   /volume1/docker/synology-nas-mcp/
+#   /volume1/docker/synology-mcp/
 #     ├── docker-compose.yml     (copy of this file, renamed)
 #     ├── .env                   (secrets — see .env.example; NEVER committed)
 #     └── audit/                 (bind-mounted into the container at /audit)
@@ -16,9 +16,9 @@
 # docs/SETUP.md for the one-time setup that enables it.
 
 services:
-  synology-nas-mcp:
-    image: synology-nas-mcp:latest
-    container_name: synology-nas-mcp
+  synology-mcp:
+    image: synology-mcp:latest
+    container_name: synology-mcp
     restart: unless-stopped
     network_mode: host
     # Defense in depth — the daemon runs as `node` (uid 1000) inside the
@@ -38,5 +38,9 @@ services:
       MCP_BIND_PORT: ${MCP_BIND_PORT:-8765}
       MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1,null}
       TLS_REJECT_UNAUTHORIZED: ${TLS_REJECT_UNAUTHORIZED:-0}
+      # Optional router (SRM) target — unset = NAS-only.
+      SRM_BASE_URL: ${SRM_BASE_URL:-}
+      SRM_USER: ${SRM_USER:-}
+      SRM_OP_ITEM: ${SRM_OP_ITEM:-Synology SRM - claude-mcp}
     volumes:
       - ./audit:/audit

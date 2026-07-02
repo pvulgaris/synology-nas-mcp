@@ -30,11 +30,13 @@ unset OP_SERVICE_ACCOUNT_TOKEN
 : "${DSM_USER:=claude-mcp}"
 # Local audit fallback (used only when MCP_AUDIT_URL is unset); the canonical
 # log lives on the NAS via the daemon's POST /audit endpoint.
-: "${AUDIT_LOG_DIR:=$HOME/.cache/synology-nas-mcp/audit}"
+: "${AUDIT_LOG_DIR:=$HOME/.cache/synology-mcp/audit}"
 : "${MCP_AUDIT_URL:=http://nas.local:8765/audit}"
 # Persist the DSM SID across tsx runs so we don't burn a TOTP code each process
-# (DSM rejects TOTP reuse within the 30s window with code 404).
-: "${DSM_SID_CACHE_FILE:=$HOME/.cache/synology-nas-mcp/sid.json}"
+# (DSM rejects TOTP reuse within the 30s window with code 404). NAS only — the
+# router (SRM) deliberately gets no SID cache; SRM expires sessions faster than
+# the client TTL, so a cached SID goes stale (119 → TOTP-reuse 404).
+: "${DSM_SID_CACHE_FILE:=$HOME/.cache/synology-mcp/sid.json}"
 export DSM_OP_VAULT DSM_OP_ITEM DSM_BASE_URL DSM_USER \
        AUDIT_LOG_DIR MCP_AUDIT_URL DSM_SID_CACHE_FILE
 # Cache dir holds the SID + audit log — keep it owner-only.
@@ -55,6 +57,20 @@ DSM_TOTP_SECRET=$(_op "${_base}/totp")              || { echo "op read totp fail
 MCP_BEARER_TOKEN=$(_op "${_base}/mcp_bearer_token") || { echo "op read mcp_bearer_token failed" >&2; _optok=""; return 1; }
 export DSM_PASSWORD DSM_TOTP_SECRET MCP_BEARER_TOKEN
 echo "[dev] DSM creds loaded from 1Password"
+
+# Router (SRM) creds — gated on SRM_BASE_URL, the same switch config.ts uses.
+if [ -n "${SRM_BASE_URL:-}" ]; then
+  : "${SRM_OP_ITEM:=Synology SRM}"
+  export SRM_OP_ITEM
+  _rbase="op://${DSM_OP_VAULT}/${SRM_OP_ITEM}"
+  if SRM_PASSWORD=$(_op "${_rbase}/password") && SRM_TOTP_SECRET=$(_op "${_rbase}/totp"); then
+    export SRM_PASSWORD SRM_TOTP_SECRET
+    echo "[dev] router (SRM) creds loaded from 1Password"
+  else
+    echo "[dev] SRM_BASE_URL set but op read failed; router creds not loaded" >&2
+  fi
+  unset _rbase
+fi
 
 unset _self_dir _optok _base
 unset -f _op

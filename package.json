@@ -1,16 +1,16 @@
 {
-  "name": "synology-nas-mcp",
-  "version": "0.3.2",
-  "description": "MCP server for managing a Synology NAS (DSM 7) — packages, security audit, shares. Deploys as a container on the NAS itself; reachable from your Macs over Tailscale.",
+  "name": "synology-mcp",
+  "version": "0.4.0",
+  "description": "MCP server for managing a Synology NAS (DSM 7) and SRM router — packages, security audit, shares, storage health, and cross-device update detection. Deploys as a container on the NAS itself; reachable from your Macs over Tailscale.",
   "type": "module",
   "license": "MIT",
   "author": "Peter Vulgaris",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pvulgaris/synology-nas-mcp.git"
+    "url": "git+https://github.com/pvulgaris/synology-mcp.git"
   },
-  "homepage": "https://github.com/pvulgaris/synology-nas-mcp#readme",
-  "bugs": "https://github.com/pvulgaris/synology-nas-mcp/issues",
+  "homepage": "https://github.com/pvulgaris/synology-mcp#readme",
+  "bugs": "https://github.com/pvulgaris/synology-mcp/issues",
   "engines": {
     "node": ">=22"
   },
@@ -23,7 +23,7 @@
     "claude"
   ],
   "bin": {
-    "synology-nas-mcp": "dist/cli.js"
+    "synology-mcp": "dist/cli.js"
   },
   "files": [
     "dist/"
@@ -36,7 +36,7 @@
     "daemon": "node dist/cli.js daemon",
     "deploy": "tsx src/dev/runner.ts deploy",
     "verify": "tsx src/dev/verify-tools.ts",
-    "test": "node --import tsx --test --test-force-exit src/tools/*.test.ts"
+    "test": "node --import tsx --test --test-force-exit src/*.test.ts src/tools/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",

@@ -1,4 +1,4 @@
-# synology-nas-mcp
+# synology-mcp
 
 MCP server for managing a Synology NAS (DSM 7). Exposes typed tools for package management, security audit, share inspection, and storage health. Designed to run as a container on the NAS itself, reachable from your Mac over Tailscale.
 
@@ -6,7 +6,7 @@ MCP server for managing a Synology NAS (DSM 7). Exposes typed tools for package 
 
 - Read tools (safe to invoke): system status, storage/drive health, installed packages, available updates, package info, Security Advisor findings, users + 2FA state, firewall, DSM security settings, shares, external access (QuickConnect / DDNS / reverse proxy), certificates, notifications.
 - Write tools (gated on user confirmation): install / uninstall / update a single package, plus start/stop/restart. Refuses DSM-self updates and kernel-flagged packages.
-- Per-write audit log written to `/volume1/docker/synology-nas-mcp/audit/YYYY-MM.jsonl`.
+- Per-write audit log written to `/volume1/docker/synology-mcp/audit/YYYY-MM.jsonl`.
 
 ## What it does *not* do
 
@@ -26,10 +26,10 @@ Setup steps are in [`docs/SETUP.md`](docs/SETUP.md). Each step is discrete; unin
 
 | What | Where |
 |---|---|
-| Container image | DSM Container Manager, project `synology-nas-mcp` |
+| Container image | DSM Container Manager, project `synology-mcp` |
 | Container network | host networking; binds to tailscale0 only |
 | HTTP port | 8765 (configurable) |
-| Audit log | `/volume1/docker/synology-nas-mcp/audit/YYYY-MM.jsonl` |
+| Audit log | `/volume1/docker/synology-mcp/audit/YYYY-MM.jsonl` |
 | DSM user | `claude-mcp` (admin group, 2FA, shared-folder access denied) |
 | Secrets | 1Password item "Synology DSM - claude-mcp" (ASCII hyphen, not em-dash) |
 | Outbound | localhost:5001 (DSM API) only |

@@ -6,11 +6,13 @@
  * Usage: source dev/source-creds.sh && DSM_BASE_URL=https://nas.local:5001 \
  *        npx tsx src/dev/verify-tools.ts [tool-name]
  *
- * No tool name → run all six. Tool name → run just that one.
+ * No tool name → run the whole suite. Tool name → run just that one.
  */
 import { loadConfig } from "../config.js";
-import { DsmClient } from "../dsm.js";
+import { SynoClient, makeRouterClient } from "../dsm.js";
 import { nasStatus, nasStorageHealth } from "../tools/system.js";
+import { nasDsmOsCheckUpdate, synologyUpdateDigest } from "../tools/updates.js";
+import { routerSrmOsCheckUpdate } from "../tools/router.js";
 import { nasSharesList } from "../tools/shares.js";
 import {
   nasPackagesList,
@@ -26,7 +28,7 @@ import { nasExternalAccess } from "../tools/external.js";
 import { nasNotifications } from "../tools/notifications.js";
 import { nasCertificates } from "../tools/certificates.js";
 
-const SUITE: Record<string, (dsm: DsmClient) => Promise<unknown>> = {
+const SUITE: Record<string, (dsm: SynoClient) => Promise<unknown>> = {
   nas_status: nasStatus,
   nas_storage_health: nasStorageHealth,
   nas_shares_list: nasSharesList,
@@ -39,6 +41,20 @@ const SUITE: Record<string, (dsm: DsmClient) => Promise<unknown>> = {
   nas_external_access: nasExternalAccess,
   nas_notifications: nasNotifications,
   nas_certificates: nasCertificates,
+  nas_dsm_os_check_update: nasDsmOsCheckUpdate,
+};
+
+// Tools that need the router client too. Router tools no-op gracefully when no
+// router is configured so the suite still passes on a NAS-only setup.
+const ROUTER_AWARE: Record<
+  string,
+  (dsm: SynoClient, router: SynoClient | null) => Promise<unknown>
+> = {
+  synology_update_digest: (dsm, router) => synologyUpdateDigest(dsm, router),
+  router_srm_os_check_update: (_dsm, router) =>
+    router
+      ? routerSrmOsCheckUpdate(router)
+      : Promise.resolve({ note: "router not configured" }),
 };
 
 // Per-tool predicates that catch "tool returned successfully but the field is
@@ -140,6 +156,18 @@ const ASSERTIONS: Record<string, (out: any) => string | null> = {
       return "days_until_expiry not numeric on all certs";
     return null;
   },
+  nas_dsm_os_check_update: (o) => {
+    if (typeof o.available !== "boolean") return "available not bool";
+    if (o.available && !o.available_version) return "available true but no available_version";
+    return null;
+  },
+  synology_update_digest: (o) => {
+    if (!Array.isArray(o.sources) || o.sources.length !== 4) return "sources not length-4 array";
+    if (!Array.isArray(o.pending)) return "pending not an array";
+    if (typeof o.total_pending !== "number") return "total_pending not number";
+    if (o.total_pending !== o.pending.length) return "total_pending != pending.length";
+    return null;
+  },
 };
 
 async function main() {
@@ -147,23 +175,30 @@ async function main() {
   if (cfg.tlsSkipVerify) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
-  const dsm = new DsmClient(cfg);
+  const dsm = new SynoClient(cfg);
+  const router = makeRouterClient(cfg);
 
   const args = process.argv.slice(2);
   const strict = args.includes("--strict");
   const filter = args.find((a) => !a.startsWith("--"));
-  const names = filter ? [filter] : Object.keys(SUITE);
+  const names = filter
+    ? [filter]
+    : [...Object.keys(SUITE), ...Object.keys(ROUTER_AWARE)];
 
   let failures = 0;
   for (const name of names) {
-    const fn = SUITE[name];
+    const fn = SUITE[name]
+      ? () => SUITE[name](dsm)
+      : ROUTER_AWARE[name]
+        ? () => ROUTER_AWARE[name](dsm, router)
+        : null;
     if (!fn) {
       console.error(`unknown tool: ${name}`);
       process.exit(2);
     }
     console.error(`\n=== ${name} ===`);
     try {
-      const out = await fn(dsm);
+      const out = await fn();
       console.log(JSON.stringify(out, null, 2));
       const check = ASSERTIONS[name];
       if (check) {

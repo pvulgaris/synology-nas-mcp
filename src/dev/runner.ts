@@ -12,6 +12,7 @@
  * Subcommands:
  *   list                      — installed packages, condensed
  *   pending                   — packages with updates available
+ *   info <name>               — nas_package_info tool output (name/publisher/etc.)
  *   catalog <name>            — full catalog entry (link/md5/size)
  *   update <name>             — run the production upgrade flow end-to-end
  *   raw <api> <method> [k=v…] — one-shot DSM call (GET); add `--post` to POST.
@@ -19,17 +20,18 @@
  *   deploy [--tar=<path>] [--project=<name>]
  *                             — upload tar → import image → rebuild Compose
  *                               project → poll /health. Defaults: tar at
- *                               ~/Downloads/synology-nas-mcp-<version>.tar,
- *                               project 'synology-nas-mcp'.
+ *                               ~/Downloads/synology-mcp-<version>.tar,
+ *                               project 'synology-mcp'.
  *
  * The point of `raw` is iteration: try `Installation.upgrade` with different
  * param combos until 4501 goes away, without rebuilding anything.
  */
 import { loadConfig } from "../config.js";
-import { DsmClient } from "../dsm.js";
+import { SynoClient } from "../dsm.js";
 import {
   nasPackagesList,
   nasPackagesCheckUpdates,
+  nasPackageInfo,
   nasPackageUpdate,
 } from "../tools/packages.js";
 import { deploy } from "./deploy.js";
@@ -70,7 +72,7 @@ async function main() {
   if (cfg.tlsSkipVerify) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
-  const dsm = new DsmClient(cfg);
+  const dsm = new SynoClient(cfg);
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd) {
     console.error("usage: runner <list|pending|catalog|update|raw> …");
@@ -90,6 +92,13 @@ async function main() {
     case "pending": {
       const r = await nasPackagesCheckUpdates(dsm);
       console.log(JSON.stringify(r, null, 2));
+      break;
+    }
+    case "info": {
+      const name = rest[0];
+      if (!name) throw new Error("info: usage: info <name>");
+      const out = await nasPackageInfo(dsm, { name });
+      console.log(JSON.stringify(out, null, 2));
       break;
     }
     case "catalog": {
@@ -132,7 +141,7 @@ async function main() {
         throw new Error(`deploy: unknown flag "${tok}"`);
       }
       if (!tar) {
-        // Default: ~/Downloads/synology-nas-mcp-<version>.tar
+        // Default: ~/Downloads/synology-mcp-<version>.tar
         const { readFile } = await import("node:fs/promises");
         const { join } = await import("node:path");
         const home = process.env.HOME!;
@@ -142,7 +151,7 @@ async function main() {
             "utf8"
           )
         );
-        tar = join(home, "Downloads", `synology-nas-mcp-${pkg.version}.tar`);
+        tar = join(home, "Downloads", `synology-mcp-${pkg.version}.tar`);
       }
       const out = await deploy(cfg, { tar, project });
       console.log(JSON.stringify(out, null, 2));
@@ -183,7 +192,7 @@ async function main() {
       break;
     }
     default:
-      console.error(`unknown subcommand: ${cmd}. Try one of: list, pending, catalog, update, raw, json, deploy.`);
+      console.error(`unknown subcommand: ${cmd}. Try one of: list, pending, info, catalog, update, raw, json, deploy.`);
       process.exit(2);
   }
 }

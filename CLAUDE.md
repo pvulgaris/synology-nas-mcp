@@ -1,4 +1,4 @@
-# CLAUDE.md — synology-nas-mcp
+# CLAUDE.md — synology-mcp
 
 Onboarding for a future Claude session (or any human collaborator). What's here that you can't easily get from the README, source files, or `git log`.
 
@@ -11,7 +11,7 @@ A small MCP server that exposes a typed subset of the Synology DSM 7 Web API (pa
                     │                                      │                         │
                     │  stdio (spawned per session)         │  Container Manager      │
                     ▼                                      │  ┌───────────────────┐  │
-       /opt/homebrew/bin/synology-nas-mcp bridge ───tailnet───▶│ synology-nas-mcp: │  │
+       /opt/homebrew/bin/synology-mcp bridge ───tailnet───▶│ synology-mcp: │  │
                     ▲                                      │  │   (Node.js)       │  │
                     │  HTTP + bearer                       │  │  HTTP daemon      │  │
    Claude Code ─────┘                                      │  └─────────┬─────────┘  │
@@ -30,22 +30,42 @@ A small MCP server that exposes a typed subset of the Synology DSM 7 Web API (pa
 |---|---|---|---|
 | `serve` | stdio | local dev only | `claude mcp add … -t stdio` for testing the server logic without HTTP. Rarely used. |
 | `daemon` | Streamable HTTP | NAS container | The production deploy. Reads creds via `op`, binds tailscale0, listens on :8765. |
-| `bridge` | stdio → HTTP client | the user's Mac (Claude Desktop) | Tiny proxy. Reads `MCP_BRIDGE_URL` + `MCP_BRIDGE_TOKEN` env, forwards stdio JSON-RPC to the daemon. ~40 lines. Lives at `/opt/homebrew/bin/synology-nas-mcp` after `npm install -g .` |
+| `bridge` | stdio → HTTP client | the user's Mac (Claude Desktop) | Tiny proxy. Reads `MCP_BRIDGE_URL` + `MCP_BRIDGE_TOKEN` env, forwards stdio JSON-RPC to the daemon. ~40 lines. Lives at `/opt/homebrew/bin/synology-mcp` after `npm install -g .` |
 
 ## Deploy loop (the commands you'll actually run)
 
 `docs/SETUP.md` covers first-time install. For incremental development:
 
+Builds use Apple `container` + `skopeo` (NOT Colima/Docker — that toolchain is
+retired here; the `container` system service is always running). The DS224+ is
+Intel, so the image must be `linux/amd64`.
+
 ```sh
-# On the Mac (Colima or Docker Desktop running for cross-arch builds):
 cd <repo>
-docker build --platform linux/amd64 \
-  -t synology-nas-mcp:<ver> -t synology-nas-mcp:latest .
-docker save synology-nas-mcp:<ver> synology-nas-mcp:latest \
-  -o ~/Downloads/synology-nas-mcp-<ver>.tar
+
+# 1. Cross-arch build (amd64-on-arm64 via `container`).
+container build --platform linux/amd64 -t synology-mcp:<ver> .
+
+# 2. Export to an OCI archive, then convert to a docker-archive DSM can import.
+container image save --platform linux/amd64 synology-mcp:<ver> -o /tmp/oci.tar
+skopeo copy --override-os linux --override-arch amd64 \
+  oci-archive:/tmp/oci.tar \
+  docker-archive:~/Downloads/synology-mcp-<ver>.tar:synology-mcp:latest
+
+# 3. GOTCHA — rewrite the archive's tag to the BARE image name before importing.
+#    skopeo writes the RepoTag fully-qualified (docker.io/library/synology-mcp:latest)
+#    in both manifest.json AND the legacy `repositories` file. DSM imports that as a
+#    DISTINCT image and never reassigns the bare `synology-mcp:latest` tag the Compose
+#    project actually pulls — so the container silently keeps the OLD image and /health
+#    never flips (this cost a full debugging session once). Extract → edit → re-tar:
+#      manifest.json[0].RepoTags = ["synology-mcp:<ver>", "synology-mcp:latest"]
+#      repositories              = {"synology-mcp": { ...same inner... }}
+#    The image name MUST be `synology-mcp` (what synology.compose.yml's `image:` pulls
+#    and what the live Container Manager project expects) — NOT the GitHub repo name
+#    `synology-mcp`.
 
 source dev/source-creds.sh   # once per shell; reads creds from 1Password via op
-npm run deploy                # ~30s: upload+import+stop+build+start+/health-verify
+npm run deploy                # upload+import+build(recreates from new :latest)+/health-verify
 ```
 
 `npm run deploy` (`src/dev/deploy.ts`) uses two DSM Web API quirks that aren't in any public doc:
@@ -55,7 +75,7 @@ npm run deploy                # ~30s: upload+import+stop+build+start+/health-ver
 
 Both reverse-engineered from a DevTools HAR capture.
 
-When bumping the version, only update `package.json` — `src/version.ts` reads it at startup and both `server.ts` and `http.ts` import the constant. The docker tag in the build command is just the human-facing label; nothing depends on it matching.
+When bumping the version, only update `package.json` — `src/version.ts` reads it at startup and both `server.ts` and `http.ts` import the constant, and it flows through to `/health` (which is what `npm run deploy` verifies, so a bump is what makes the post-deploy health check meaningful rather than a no-op against the already-running version). The `:<ver>` image tag is a human label; the `:latest` tag is what the Compose project pulls. The image **name** (`synology-mcp`) is load-bearing — it must match `synology.compose.yml`'s `image:` (see the bare-tag gotcha above). The Compose project on the NAS is also named `synology-mcp`; `src/dev/deploy.ts`'s `PROJECT_NAME_DEFAULT` matches it, so `npm run deploy` needs no `--project` flag.
 
 ## Write flow: install & update (two-phase, download then install-from-path)
 
@@ -81,6 +101,14 @@ When bumping the version, only update `package.json` — `src/version.ts` reads 
 **Uninstall** is a single call: `SYNO.Core.Package.Uninstallation.uninstall` with `id` and `dsm_apps=""`. The `dsm_apps` field is a list of linked DSM apps to remove together, NOT a "keep data" flag.
 
 **Uninstall data deletion is package-specific (HAR-verified 2026-06-23).** Package Center's "Delete the items listed above" checkbox rides `extra_values` carrying a **per-package** wizard key — `"{\"pkgwizard_remove_cstn_db\":true}"` for Synology Drive; ABB and others differ. That key is defined in each package's own client-side uninstall wizard, NOT exposed by any queryable API (`is_uninstall_pages:true` in `Package.list` only flags that a dialog *exists*; there's no precheck method — `Uninstallation` has only `uninstall`). So the MCP can detect a data-bearing package but can't safely drive its delete-data option blind. `nasPackageUninstall` therefore only ever does the **data-preserving** uninstall (omit `extra_values`): when `is_uninstall_pages` is true it returns `status:"needs_data_confirmation"` and requires `keep_data:true` to proceed; `keep_data:false` is refused with a pointer to the DSM UI (the honest path for actual deletion). Mirrors the install dependency-confirmation pattern.
+
+## Router (SRM) support + on-demand update tools
+
+The MCP also targets the Synology **router** (SRM) and exposes on-demand update-detection tools across both devices. (An earlier branch grew a *scheduled* checker + email alerter — an Active Insight replacement — but that automation was deliberately removed; what remains is read-only and invoked on demand. No scheduler, no email, no `NOTIFY_*` config. If you want periodic checks, run a tool or an external cron job.)
+
+- **Detection tools** (read-only, in `tools/updates.ts` + `tools/router.ts`): `nas_dsm_os_check_update` (`SYNO.Core.Upgrade.Server check` v1 — *synchronous*, no poll), `router_srm_os_check_update`, and the aggregator `synology_update_digest` (fans out to all four sources — `nas_os`, `nas_packages`, `router_os`, `router_packages` — via per-source catch so one device down never aborts the rest). There is deliberately **no** standalone `router_packages_check_updates` tool: SRM exposes no package-update API (`SYNO.Core.Package.Server` 103s), so router-package state would be nothing but the no-API note; the digest's `router_packages` source carries that note in context instead. `routerPackagesCheckUpdates` survives only as that digest-internal probe. OS detection is **detect-only**; applying DSM/SRM updates stays deferred (brick risk). `mapOsUpdate` only reports `available:true` when a concrete version is named — bias to silence over crying wolf.
+- **Router target** (`config.ts` `RouterTarget` + `routerConfigFrom`, `dsm.ts` `makeRouterClient`): a *second* `SynoClient` at `https://<router>:8001`, built **read-only** (`SynoClient` `readOnly` mode refuses any POST / non-read method). The package/upgrade APIs are admin-gated (no selective grant, like DSM), so it logs in as a **dedicated SRM admin** — SRM *does* support extra admins (Control Panel → User → "Grant administrator privilege"; the old `aerialls/synology-srm` "primary admin only" note is pre-1.3), so use a dedicated `claude-mcp`-style account, not the primary login (`loadDsmOnlyCredentials`, bearer-free; 2FA; 1Password only). Per-instance `session` + no SID cache (fresh login per process; a dev disk cache was tried and reverted — SRM expires sessions faster than the 10-min client TTL, so a cached SID goes stale → 119 → TOTP-reuse 404). Read tools are token-free (no `X-SYNO-TOKEN`); a future mutating router path would fetch the token via its own request.
+- **Verified live (SRM 1.3.1 / RT6600ax, 2026-06-26):** (1) router login is at `auth.cgi` with `SYNO.API.Auth` **v3** — DSM's `entry.cgi`/v6 returns code 102 on SRM (see `config.ts` per-target `authVersion`/`authPath`); (2) SRM reuses `SYNO.Core.Upgrade.Server check` v1 and returns DSM's **flat `{available, version}`** shape — the anticipated `{type, version}` never materialised, so `mapOsUpdate` needed no change — with `current_version` read from `SYNO.Core.System info` at **v1** (v3 is DSM-only, 104s on SRM); (3) SRM's admin-gated reads do **not** need `enable_syno_token`. **SRM has NO package-update API:** `SYNO.Core.Package.Server` returns code 103 (no callable read method), so `routerPackagesCheckUpdates` degrades to an honest `note` rather than erroring — router *OS* updates ARE detected. (The earlier "SRM packages confirmed at `Package.Server` v2 like DSM" claim was wrong.) Secondary SRM admins are granted via Control Panel → User → Edit → "Grant administrator privilege"; a Normal (non-admin) user gets code 402 at login. **Still planned:** more router read/audit tools (status, security scan) mirroring the NAS read tools.
 
 ## DSM API quirks (the consolidated cheatsheet)
 
@@ -117,7 +145,7 @@ If `MCP_BIND_HOST` is left empty, `resolveBindHost` falls back to `0.0.0.0` (LAN
 
 ### Streamable HTTP **stateless** mode requires a fresh `McpServer` per request
 
-The MCP SDK's `sessionIdGenerator: undefined` (stateless) mode requires a new `McpServer` + new `StreamableHTTPServerTransport` for *every* HTTP request. Sharing one server across requests works for the first call, then 500s on every subsequent one. The `DsmClient` is hoisted outside the per-request scope so we keep the SID cache warm.
+The MCP SDK's `sessionIdGenerator: undefined` (stateless) mode requires a new `McpServer` + new `StreamableHTTPServerTransport` for *every* HTTP request. Sharing one server across requests works for the first call, then 500s on every subsequent one. The `SynoClient` is hoisted outside the per-request scope so we keep the SID cache warm.
 
 ### Bridge must filter `notifications/initialized` and `.catch` send rejections
 
@@ -153,7 +181,7 @@ The skill prompt (see `skills/synology/SKILL.md`) loads a per-user policy file n
 
 ### TLS verification is process-wide via `NODE_TLS_REJECT_UNAUTHORIZED=0`
 
-v0.2.12 tried a per-fetch `undici` Agent for scoped TLS skip; it interacted badly with Node 22's built-in fetch (intermittent "fetch failed" + silently-empty responses on some endpoints). v0.2.14 reverted to process-wide skip via the `NODE_TLS_REJECT_UNAUTHORIZED=0` env var set at startup when `cfg.tlsSkipVerify` is true. The blast radius is bounded: the daemon only talks to DSM at `cfg.dsmBaseUrl`; there are no other outbound HTTPS calls. If you add one, route it explicitly through a verifying agent or restore the per-fetch scoping.
+v0.2.12 tried a per-fetch `undici` Agent for scoped TLS skip; it interacted badly with Node 22's built-in fetch (intermittent "fetch failed" + silently-empty responses on some endpoints). v0.2.14 reverted to process-wide skip via the `NODE_TLS_REJECT_UNAUTHORIZED=0` env var set at startup when `cfg.tlsSkipVerify` is true. The blast radius is bounded to **DSM-shaped targets**: the daemon talks to DSM at `cfg.dsmBaseUrl` and — when a router is configured — to SRM at `cfg.router.baseUrl` (also self-signed; the skip is intended for both). If you ever add a non-Synology outbound (e.g. a third-party push or an SMTP relay), route THAT call through a per-call **verifying** undici Agent (`rejectUnauthorized:true`) to override the global skip — the enforcing direction is safe on Node 22; only the skipping per-fetch agent broke. Caveat worth knowing: the router login transmits the SRM **admin** password (a dedicated admin, but still admin) over the (unverified) self-signed link, so a LAN MITM between the NAS and the router could harvest it — pin the SRM cert if that's in your threat model.
 
 ### No `synology-api` npm dep on purpose
 

@@ -1,6 +1,14 @@
 /**
- * Thin DSM Web API client. Handles login (with TOTP), SID caching, and
- * automatic re-auth on 119 ("SID not found").
+ * Thin Synology Web API client (`SynoClient`). Handles login (with TOTP), SID
+ * caching, and automatic re-auth on 119 ("SID not found").
+ *
+ * One client serves both targets: the DSM NAS and the SRM router speak the same
+ * SYNO.* Web API, so "DSM vs SRM" is expressed as Config (base URL, auth path /
+ * version, session) plus construction options (read-only, cred loader) — not as a
+ * second client class. The wire shapes it exchanges keep the `Dsm*` prefix
+ * (`DsmResponse`, `DsmError`, `DsmCallOptions`): "DSM Web API" is Synology's name
+ * for the protocol *both* devices implement, so `Dsm*` names the protocol while
+ * `SynoClient` names the connection.
  *
  * Reference: Synology DSM Login Web API Guide; SYNO.API.* family endpoints.
  * We hit `entry.cgi` for almost everything (the unified DSM dispatcher).
@@ -13,9 +21,24 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Config } from "./config.js";
-import { currentTotpCode, loadCredentials, type Credentials } from "./auth.js";
+import { routerConfigFrom } from "./config.js";
+import {
+  currentTotpCode,
+  loadCredentials,
+  loadDsmOnlyCredentials,
+  type DsmOnlyCredentials,
+} from "./auth.js";
 
 const SID_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+// Bound every HTTP call. A target reachable at the TCP layer but unresponsive at
+// the application layer (a wedged SRM web service, a stalled TLS handshake) would
+// otherwise hang on undici's multi-minute default — and because the digest awaits
+// all sources, one such router would withhold the whole result past the MCP
+// client's ~300s drop, defeating the "one device down never aborts the rest"
+// guarantee. Reads return in seconds, so 30s is generous; on timeout fetch rejects
+// (AbortError, not a DsmError) and the caller's catch / runSource surfaces it.
+const REQUEST_TIMEOUT_MS = 30_000;
 
 // Dev-only: persist the SID across `tsx` invocations so the harness doesn't
 // burn a TOTP code on every run. DSM rejects reuse within the same 30s window
@@ -57,6 +80,19 @@ export interface DsmCallOptions {
   post?: boolean;
 }
 
+/** Methods a read-only client (the router) is allowed to call. Anything else —
+ *  or any POST — is refused before it leaves the process. */
+const READ_METHODS = new Set([
+  "get",
+  "list",
+  "check",
+  "info",
+  "load_info",
+  "query",
+  "query_info",
+  "status",
+]);
+
 /** DSM error codes we react to programmatically. The DSM Web API is
  *  reverse-engineered, so this is a small curated subset — see
  *  docs/dsm-api-quirks.md for the broader catalog. Only codes referenced in
@@ -81,17 +117,31 @@ export class DsmError extends Error {
   }
 }
 
-export class DsmClient {
-  private creds: Credentials | null = null;
+export interface SynoClientOptions {
+  /** Refuse any mutating call (POST or non-read method). Used by the router
+   *  client, which authenticates as a dedicated SRM admin — read-only is
+   *  enforced here so a stray write can't leave the process. */
+  readOnly?: boolean;
+  /** Override how login secrets are fetched. The router passes the bearer-free
+   *  loader; default is the MCP's own `loadCredentials`. */
+  credLoader?: (cfg: Config) => Promise<DsmOnlyCredentials>;
+}
+
+export class SynoClient {
+  private creds: DsmOnlyCredentials | null = null;
   private sid: string | null = null;
   private sidObtainedAt = 0;
+  private readonly readOnly: boolean;
+  private readonly credLoader: (cfg: Config) => Promise<DsmOnlyCredentials>;
   // Concurrent ensureSession() calls share the in-flight login. Without this,
   // a Promise.all of MCP tool calls fires N parallel logins that all reuse the
   // same 30s TOTP code; DSM accepts the first and 404s the rest.
   private loginInFlight: Promise<void> | null = null;
 
-  constructor(private cfg: Config) {
-    const cachePath = process.env.DSM_SID_CACHE_FILE;
+  constructor(private cfg: Config, opts: SynoClientOptions = {}) {
+    this.readOnly = opts.readOnly ?? false;
+    this.credLoader = opts.credLoader ?? loadCredentials;
+    const cachePath = this.cfg.sidCacheFile;
     if (cachePath) {
       const cached = readSidCache(cachePath);
       if (cached && Date.now() - cached.at < SID_TTL_MS) {
@@ -102,7 +152,10 @@ export class DsmClient {
   }
 
   private async ensureSession(): Promise<void> {
-    if (!this.creds) this.creds = await loadCredentials(this.cfg);
+    // Creds are loaded inside login() (under the loginInFlight guard), not here:
+    // a fresh cached SID needs no creds, and loading here let the digest's
+    // concurrent fan-out fire N redundant credLoader calls (an `op` subprocess
+    // storm) on a cold client before any of them assigned this.creds.
     const fresh = this.sid && Date.now() - this.sidObtainedAt < SID_TTL_MS;
     if (fresh) return;
     if (!this.loginInFlight) {
@@ -114,22 +167,33 @@ export class DsmClient {
   }
 
   private async login(): Promise<void> {
-    if (!this.creds) this.creds = await loadCredentials(this.cfg);
+    if (!this.creds) this.creds = await this.credLoader(this.cfg);
     const otpCode = currentTotpCode(this.creds.totpSecret);
-    const url = new URL(`${this.cfg.dsmBaseUrl}/webapi/entry.cgi`);
+    const url = new URL(`${this.cfg.dsmBaseUrl}/webapi/${this.cfg.authPath}`);
     url.searchParams.set("api", "SYNO.API.Auth");
-    url.searchParams.set("version", "6");
+    url.searchParams.set("version", String(this.cfg.authVersion));
     url.searchParams.set("method", "login");
     url.searchParams.set("account", this.cfg.dsmUser);
     url.searchParams.set("passwd", this.creds.password);
     url.searchParams.set("otp_code", otpCode);
     url.searchParams.set("format", "sid");
-    url.searchParams.set("session", "synology-nas-mcp");
+    url.searchParams.set("session", this.cfg.session);
+    // NOTE: do NOT request `enable_syno_token=yes` here. It makes DSM issue a
+    // token-bound session that then rejects the plain `_sid` GET with code 119
+    // on the very next call (verified against the live NAS). Every tool is a
+    // read, so the CSRF token isn't needed; a future mutating path would fetch
+    // it via a dedicated request rather than poisoning this read session.
 
-    const res = await fetch(url, { method: "GET" });
+    const res = await fetch(url, {
+      method: "GET",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     const body = (await res.json()) as DsmResponse<{ sid: string }>;
     if (!body.success || !body.data?.sid) {
       const code = body.error?.code ?? -1;
+      // Surface the full auth error payload (matches callOnce's data-call logging);
+      // login failures are otherwise opaque (just a code) and hard to diagnose.
+      console.error(`[dsm] login ✗ code=${code}`, JSON.stringify(body.error ?? {}));
       throw new DsmError(
         "SYNO.API.Auth",
         "login",
@@ -140,7 +204,7 @@ export class DsmClient {
     }
     this.sid = body.data.sid;
     this.sidObtainedAt = Date.now();
-    const cachePath = process.env.DSM_SID_CACHE_FILE;
+    const cachePath = this.cfg.sidCacheFile;
     if (cachePath) writeSidCache(cachePath, this.sid);
   }
 
@@ -149,7 +213,14 @@ export class DsmClient {
    * codes 117 or 119 and retrying.
    */
   async call<T = any>(opts: DsmCallOptions): Promise<T> {
+    if (this.readOnly && (opts.post || !READ_METHODS.has(opts.method))) {
+      throw new Error(
+        `Read-only SynoClient refused ${opts.api}.${opts.method}` +
+          `${opts.post ? " (POST)" : ""} — this client is restricted to read methods.`
+      );
+    }
     await this.ensureSession();
+    const sidAtCall = this.sid;
     try {
       return await this.callOnce<T>(opts);
     } catch (err) {
@@ -157,7 +228,12 @@ export class DsmClient {
         err instanceof DsmError &&
         (err.code === DSM_ERR.SID_EXPIRED || err.code === DSM_ERR.SID_NOT_FOUND)
       ) {
-        this.sid = null;
+        // Only invalidate if a concurrent caller hasn't already refreshed the SID.
+        // Under the digest's parallel fan-out, a straggler that 119s *after* the
+        // shared re-login completed would otherwise null the fresh SID and force a
+        // second login within the 30s TOTP window (→ code 404). If it already
+        // changed, skip the reset and just retry with the new SID.
+        if (this.sid === sidAtCall) this.sid = null;
         await this.ensureSession();
         return await this.callOnce<T>(opts);
       }
@@ -191,13 +267,11 @@ export class DsmClient {
     const verb = opts.post ? "POST" : "GET";
     console.error(`[dsm] → ${verb} ${opts.api}.${opts.method}`, safeParams);
 
+    const headers: Record<string, string> = {};
+    if (opts.post) headers["Content-Type"] = "application/x-www-form-urlencoded";
     const init: RequestInit = opts.post
-      ? {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: body.toString(),
-        }
-      : { method: "GET" };
+      ? { method: "POST", headers, body: body.toString(), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }
+      : { method: "GET", headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
     const res = await fetch(url, init);
     const json = (await res.json()) as DsmResponse<T>;
     if (!json.success) {
@@ -231,4 +305,15 @@ export class DsmClient {
   hasSession(): boolean {
     return !!this.sid;
   }
+}
+
+/** Build the router (SRM) client from a Config, or null when no router target is
+ *  configured. Always read-only and bearer-free — the single place that wiring
+ *  lives, so the daemon and the CLI can't drift. */
+export function makeRouterClient(cfg: Config): SynoClient | null {
+  if (!cfg.router) return null;
+  return new SynoClient(routerConfigFrom(cfg), {
+    readOnly: true,
+    credLoader: (c) => loadDsmOnlyCredentials(c.opVault, c.opItem, "SRM"),
+  });
 }

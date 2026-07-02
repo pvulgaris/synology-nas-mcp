@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * synology-nas-mcp — entry point.
+ * synology-mcp — entry point.
  *
  * Subcommands:
- *   serve     Run MCP over stdio (for `claude mcp add` / claude.json or local dev).
- *   daemon    Run MCP over Streamable HTTP on the configured interface/port.
+ *   serve         Run MCP over stdio (for `claude mcp add` / claude.json or local dev).
+ *   daemon        Run MCP over Streamable HTTP on the configured interface/port.
+ *   bridge        stdio→HTTP proxy for Claude Desktop (runs on the Mac).
  *
  * Required env (both modes):
  *   DSM_BASE_URL, DSM_OP_VAULT, OP_SERVICE_ACCOUNT_TOKEN
@@ -17,7 +18,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { loadConfig } from "./config.js";
 import { createServer } from "./server.js";
-import { DsmClient } from "./dsm.js";
+import { SynoClient, makeRouterClient } from "./dsm.js";
 import { startHttpDaemon } from "./http.js";
 
 async function serveStdio() {
@@ -25,18 +26,20 @@ async function serveStdio() {
   // Process-wide TLS skip for DSM's self-signed cert. We tried a per-fetch
   // undici dispatcher in v0.2.12 but it interacted badly with Node 22's
   // built-in fetch (intermittent "fetch failed" + silently-empty responses
-  // on some endpoints). The blast radius of process-wide skip is bounded:
-  // the daemon only talks to DSM at cfg.dsmBaseUrl; there are no other
-  // outbound HTTPS calls. If you add one, route it explicitly through a
-  // verifying agent or restore the per-fetch scoping.
+  // on some endpoints). The blast radius of process-wide skip is bounded to
+  // DSM-shaped targets: DSM at cfg.dsmBaseUrl and, when a router is configured,
+  // SRM at cfg.router.baseUrl (also self-signed). If you add a non-Synology
+  // outbound, route THAT call through a per-call verifying undici Agent
+  // (rejectUnauthorized:true) to override the global skip.
   if (cfg.tlsSkipVerify) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
-  const dsm = new DsmClient(cfg);
-  const server = createServer(cfg, dsm);
+  const dsm = new SynoClient(cfg);
+  const router = makeRouterClient(cfg);
+  const server = createServer(cfg, dsm, router);
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[serve] synology-nas-mcp ready on stdio");
+  console.error("[serve] synology-mcp ready on stdio");
 }
 
 async function serveHttp() {
@@ -115,7 +118,8 @@ async function main() {
       break;
     default:
       console.error(
-        `Unknown command: ${cmd}. Use 'serve' (stdio direct), 'daemon' (HTTP), or 'bridge' (stdio→HTTP proxy).`
+        `Unknown command: ${cmd}. Use 'serve' (stdio direct), 'daemon' (HTTP), ` +
+          `or 'bridge' (stdio→HTTP proxy).`
       );
       process.exit(2);
   }

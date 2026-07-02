@@ -41,7 +41,8 @@
  */
 
 import type { Config } from "../config.js";
-import type { DsmClient } from "../dsm.js";
+import type { SynoClient } from "../dsm.js";
+import { DsmError } from "../dsm.js";
 import { withAudit } from "../audit.js";
 
 // DSM response shapes used by the install/uninstall/update flows. None are
@@ -108,7 +109,6 @@ interface InstalledPackage {
 
 interface CatalogPackage {
   id: string;
-  name: string;
   version: string;
   link?: string;
   md5?: string;
@@ -117,11 +117,19 @@ interface CatalogPackage {
   beta?: boolean;
   install_type?: string;
   install_on_cold_storage?: boolean;
-  publisher?: string;
-  description?: string;
   changelog?: string;
-  depend_packages?: unknown;
-  install_dep_packages?: unknown;
+  /** Display name — HAR-verified 2026-07-01: this API names it `dname`, not
+   *  `name` (that's `SYNO.Core.Package.list`'s field, a different endpoint). */
+  dname?: string;
+  /** Publisher — HAR-verified: `maintainer`, not `publisher`. */
+  maintainer?: string;
+  /** Description — HAR-verified: `desc`, not `description`. */
+  desc?: string;
+  /** Dependency map (`{pkgId: versionConstraint}` or null) — HAR-verified:
+   *  `deppkgs`, not `depend_packages`. No `install_dep_packages` field exists
+   *  on this endpoint at all; `Installation.get_queue` is the source of truth
+   *  for the resolved install plan (see the write-flow doc comment above). */
+  deppkgs?: unknown;
 }
 
 interface PackageListResp {
@@ -149,6 +157,27 @@ const POSTOP_POLL_MS = 3000;
 const INSTALL_DOWNLOAD_TIMEOUT_MS = 3 * 60 * 1000; // 3 min — .spk fetch
 const INSTALL_VERIFY_TIMEOUT_MS = 90 * 1000; // 90s — version flip after commit
 
+/** A "soft" transport error on a state-changing POST: the request didn't get a
+ *  clean DSM response, but the mutation likely completed server-side, so the
+ *  caller should confirm via a status/list poll rather than fail. Covers both
+ *  the mid-commit TCP drop DSM is known for (ECONNRESET / socket hang up /
+ *  undici "terminated" / "fetch failed") AND the per-call AbortSignal.timeout
+ *  in dsm.ts, which rejects with an AbortError/TimeoutError whose message none
+ *  of the network patterns match — without this the 30s bound would turn a
+ *  slow-but-successful commit into a hard failure. */
+function isSoftTransportError(err: unknown): boolean {
+  // A DsmError means DSM *answered* (app-level failure) — the mutation outcome
+  // is known, so never treat it as a soft transport drop even if its embedded
+  // error JSON happens to contain words like "aborted"/"terminated".
+  if (err instanceof DsmError) return false;
+  const e = err as { name?: string; message?: string } | null;
+  if (e?.name === "AbortError" || e?.name === "TimeoutError") return true;
+  const msg = String(e?.message ?? err);
+  return /fetch failed|ECONNRESET|ETIMEDOUT|socket hang up|terminated|timed out|aborted/i.test(
+    msg
+  );
+}
+
 function refuseIfProtected(name: string) {
   if (HARD_REFUSE_NAMES.has(name)) {
     throw new Error(
@@ -167,7 +196,7 @@ function sleep(ms: number): Promise<void> {
 // `additional`, not top-level (see docs/dsm-api-quirks.md). `is_system` is
 // derived from `additional.install_type === "system"` — those packages are
 // DSM-bundled and can't be uninstalled via Package Center.
-export async function nasPackagesList(dsm: DsmClient) {
+export async function nasPackagesList(dsm: SynoClient) {
   const data = await dsm.call<PackageListResp>({
     api: "SYNO.Core.Package",
     method: "list",
@@ -198,7 +227,7 @@ export async function nasPackagesList(dsm: DsmClient) {
   };
 }
 
-export async function nasPackagesCheckUpdates(dsm: DsmClient) {
+export async function nasPackagesCheckUpdates(dsm: SynoClient) {
   const [installed, catalog] = await Promise.all([
     dsm.call<PackageListResp>({
       api: "SYNO.Core.Package",
@@ -224,7 +253,7 @@ export async function nasPackagesCheckUpdates(dsm: DsmClient) {
     if (installedVersion === p.version) continue;
     pending.push({
       id: p.id,
-      name: p.name,
+      name: p.dname || p.id,
       installed_version: installedVersion,
       available_version: p.version,
       changelog: p.changelog,
@@ -240,7 +269,7 @@ export async function nasPackagesCheckUpdates(dsm: DsmClient) {
 // fields (publisher/changelog/deps) and shouldn't share that helper's throw
 // shape.
 export async function nasPackageInfo(
-  dsm: DsmClient,
+  dsm: SynoClient,
   args: { name: string }
 ) {
   const data = await dsm.call<CatalogListResp>({
@@ -250,7 +279,7 @@ export async function nasPackageInfo(
     params: { tab: "all" },
   });
   const pkg = (data?.packages ?? []).find(
-    (p) => p.id === args.name || p.name === args.name
+    (p) => p.id === args.name || p.dname === args.name
   );
   if (!pkg) {
     throw new Error(
@@ -259,13 +288,12 @@ export async function nasPackageInfo(
   }
   return {
     id: pkg.id,
-    name: pkg.name,
+    name: pkg.dname || pkg.id,
     version: pkg.version,
-    publisher: pkg.publisher,
-    description: pkg.description,
+    publisher: pkg.maintainer,
+    description: pkg.desc,
     changelog: pkg.changelog,
-    dependencies: pkg.depend_packages,
-    install_dep_packages: pkg.install_dep_packages,
+    dependencies: pkg.deppkgs,
     size: pkg.size,
     beta: pkg.beta,
   };
@@ -296,7 +324,7 @@ interface CatalogEntry {
 /** Read the catalog entry for a package id (or display name). Returns the
  *  download metadata the multi-step install/upgrade flow needs. */
 async function findInCatalog(
-  dsm: DsmClient,
+  dsm: SynoClient,
   packageId: string
 ): Promise<CatalogEntry> {
   const data = await dsm.call<CatalogListResp>({
@@ -306,7 +334,7 @@ async function findInCatalog(
     params: { tab: "all" },
   });
   const pkg = (data?.packages ?? []).find(
-    (p) => p.id === packageId || p.name === packageId
+    (p) => p.id === packageId || p.dname === packageId
   );
   if (!pkg) {
     throw new Error(
@@ -320,7 +348,7 @@ async function findInCatalog(
   }
   return {
     id: pkg.id,
-    name: pkg.name,
+    name: pkg.dname || pkg.id,
     version: pkg.version,
     link: pkg.link,
     md5: pkg.md5,
@@ -332,7 +360,7 @@ async function findInCatalog(
   };
 }
 
-async function listOneState(dsm: DsmClient, name: string) {
+async function listOneState(dsm: SynoClient, name: string) {
   const all = await nasPackagesList(dsm);
   return all.packages.find((p) => p.id === name || p.name === name) ?? null;
 }
@@ -340,7 +368,7 @@ async function listOneState(dsm: DsmClient, name: string) {
 type PackageState = Awaited<ReturnType<typeof listOneState>>;
 
 async function waitForState(
-  dsm: DsmClient,
+  dsm: SynoClient,
   packageId: string,
   predicate: (state: PackageState) => boolean
 ): Promise<PackageState> {
@@ -358,7 +386,7 @@ async function waitForState(
 /** Preflight: ask DSM whether the package can be installed/upgraded. Returns
  *  {success:true} on the happy path; a 400-style code means hard refusal. */
 async function feasibilityCheck(
-  dsm: DsmClient,
+  dsm: SynoClient,
   packageId: string
 ): Promise<void> {
   await dsm.call({
@@ -380,7 +408,7 @@ async function feasibilityCheck(
  *  Synology Drive Server, which nonetheless requires Universal Viewer); the
  *  queue is the only honest source of the dependency set. */
 async function getInstallQueue(
-  dsm: DsmClient,
+  dsm: SynoClient,
   packageId: string,
   version: string,
   beta: boolean
@@ -411,7 +439,7 @@ async function getInstallQueue(
  *  install into. We pass the package metadata from the catalog so DSM can
  *  validate dep/size/etc. `blupgrade` differs for install vs upgrade flows. */
 async function installationCheck(
-  dsm: DsmClient,
+  dsm: SynoClient,
   catalog: CatalogEntry,
   isUpgrade: boolean
 ): Promise<{ volumePath: string }> {
@@ -454,7 +482,7 @@ async function installationCheck(
  *  actual commit is the second-phase call (applyDownloadedUpgrade /
  *  applyInstallFromPath) with `installrunpackage:true`. */
 async function startInstallation(
-  dsm: DsmClient,
+  dsm: SynoClient,
   catalog: CatalogEntry,
   mode: "upgrade" | "install",
   volumePath?: string
@@ -492,7 +520,7 @@ async function startInstallation(
  *  .spk path via Installation.Download.check. The path is what the second
  *  upgrade call needs to actually install. */
 async function waitForDownloadAndGetPath(
-  dsm: DsmClient,
+  dsm: SynoClient,
   taskId: string,
   timeoutMs: number = DOWNLOAD_TIMEOUT_MS
 ): Promise<string> {
@@ -543,7 +571,7 @@ async function waitForDownloadAndGetPath(
  *  as separate sequential POSTs is equivalent (DSM doesn't gate the upgrade
  *  on the check having shared a request). */
 async function applyDownloadedUpgrade(
-  dsm: DsmClient,
+  dsm: SynoClient,
   catalog: CatalogEntry,
   downloadedPath: string
 ): Promise<void> {
@@ -596,7 +624,7 @@ async function applyDownloadedUpgrade(
  *  therefore soft: we log and let the caller's Package.list poll confirm. Any
  *  DSM-level error (a real failure) still propagates. */
 async function applyInstallFromPath(
-  dsm: DsmClient,
+  dsm: SynoClient,
   catalog: CatalogEntry,
   downloadedPath: string,
   volumePath: string
@@ -624,26 +652,28 @@ async function applyInstallFromPath(
     installrunpackage: true,
   };
   if (volumePath) params.volume_path = JSON.stringify(volumePath);
+  let res: ApplyUpgradeResp | undefined;
   try {
-    const res = await dsm.call<ApplyUpgradeResp>({
+    res = await dsm.call<ApplyUpgradeResp>({
       api: "SYNO.Core.Package.Installation",
       method: "install",
       version: 1,
       post: true,
       params,
     });
-    if (Array.isArray(res?.worker_message) && res.worker_message.length > 0) {
-      throw new Error(
-        `Install-from-path returned worker_message: ${JSON.stringify(res.worker_message)}`
-      );
-    }
   } catch (err: any) {
-    const msg = String(err?.message ?? err);
-    const isNetwork =
-      /fetch failed|ECONNRESET|ETIMEDOUT|socket hang up|terminated/i.test(msg);
-    if (!isNetwork) throw err;
+    if (!isSoftTransportError(err)) throw err;
     console.error(
       `[packages] install-from-path ${catalog.id}: connection dropped mid-commit — verifying via Package.list poll`
+    );
+  }
+  // Checked OUTSIDE the try: a populated worker_message is a genuine DSM-level
+  // install failure and must propagate — it must never be caught by the
+  // soft-transport handler (whose broadened match could otherwise swallow a
+  // worker message that happens to contain "aborted"/"timed out"/"terminated").
+  if (res && Array.isArray(res.worker_message) && res.worker_message.length > 0) {
+    throw new Error(
+      `Install-from-path returned worker_message: ${JSON.stringify(res.worker_message)}`
     );
   }
 }
@@ -653,7 +683,7 @@ async function applyInstallFromPath(
  *  Used for both the target and each resolved dependency. Throws (bounded) if
  *  the package never lands within INSTALL_VERIFY_TIMEOUT_MS. */
 async function installOnePackage(
-  dsm: DsmClient,
+  dsm: SynoClient,
   catalog: CatalogEntry
 ): Promise<PackageState> {
   console.error(`[packages] install ${catalog.id} ${catalog.version}: check`);
@@ -682,7 +712,7 @@ async function installOnePackage(
  *  endpoint reports `status:"upgrading"` long after the swap has happened
  *  server-side, so Package.list is the authoritative signal. */
 async function waitForVersionFlip(
-  dsm: DsmClient,
+  dsm: SynoClient,
   packageId: string,
   targetVersion: string,
   timeoutMs: number = DOWNLOAD_TIMEOUT_MS
@@ -704,7 +734,7 @@ async function waitForVersionFlip(
  *  does this last; best-effort here (we don't fail the whole upgrade if it
  *  4xx's). */
 async function cleanupUpgradeTmp(
-  dsm: DsmClient,
+  dsm: SynoClient,
   downloadedPath: string
 ): Promise<void> {
   if (!downloadedPath) return;
@@ -723,7 +753,7 @@ async function cleanupUpgradeTmp(
 
 export async function nasPackageUpdate(
   cfg: Config,
-  dsm: DsmClient,
+  dsm: SynoClient,
   args: { name: string }
 ) {
   refuseIfProtected(args.name);
@@ -773,7 +803,7 @@ export async function nasPackageUpdate(
 
 export async function nasPackageInstall(
   cfg: Config,
-  dsm: DsmClient,
+  dsm: SynoClient,
   args: { name: string; version?: string; accept_dependencies?: boolean }
 ) {
   refuseIfProtected(args.name);
@@ -871,7 +901,7 @@ export async function nasPackageInstall(
  *  network-level errors as soft and confirm via a follow-up status poll
  *  against the target predicate. */
 async function controlPackage(
-  dsm: DsmClient,
+  dsm: SynoClient,
   packageId: string,
   method: "start" | "stop",
   desired: (status: string | undefined) => boolean
@@ -885,9 +915,7 @@ async function controlPackage(
       params: { id: packageId },
     });
   } catch (err: any) {
-    const msg = String(err?.message ?? err);
-    const isNetwork = /fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(msg);
-    if (!isNetwork) throw err;
+    if (!isSoftTransportError(err)) throw err;
     console.error(
       `[packages] ${method} ${packageId}: connection dropped — verifying via poll`
     );
@@ -904,17 +932,17 @@ async function controlPackage(
   );
 }
 
-async function stopPackage(dsm: DsmClient, packageId: string): Promise<void> {
+async function stopPackage(dsm: SynoClient, packageId: string): Promise<void> {
   return controlPackage(dsm, packageId, "stop", (s) => s !== "running");
 }
 
-async function startPackage(dsm: DsmClient, packageId: string): Promise<void> {
+async function startPackage(dsm: SynoClient, packageId: string): Promise<void> {
   return controlPackage(dsm, packageId, "start", (s) => s === "running");
 }
 
 export async function nasPackageControl(
   cfg: Config,
-  dsm: DsmClient,
+  dsm: SynoClient,
   args: { name: string; action: "start" | "stop" | "restart" }
 ) {
   refuseIfProtected(args.name);
@@ -974,7 +1002,7 @@ export async function nasPackageControl(
 
 export async function nasPackageUninstall(
   cfg: Config,
-  dsm: DsmClient,
+  dsm: SynoClient,
   args: { name: string; keep_data?: boolean }
 ) {
   refuseIfProtected(args.name);

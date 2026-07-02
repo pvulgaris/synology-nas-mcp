@@ -30,7 +30,7 @@ import { loadCredentials } from "../auth.js";
 
 const execFileP = promisify(execFile);
 
-const PROJECT_NAME_DEFAULT = "synology-nas-mcp";
+const PROJECT_NAME_DEFAULT = "synology-mcp";
 const HEALTH_PORT_DEFAULT = 8765;
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 120_000;
@@ -79,7 +79,7 @@ async function loginForDeploy(
   url.searchParams.set("passwd", password);
   url.searchParams.set("otp_code", totp);
   url.searchParams.set("format", "sid");
-  url.searchParams.set("session", "synology-nas-mcp-deploy");
+  url.searchParams.set("session", "synology-mcp-deploy");
   url.searchParams.set("enable_syno_token", "yes");
   const res = await fetch(url, { method: "GET" });
   const body = (await res.json()) as any;
@@ -151,7 +151,7 @@ async function uploadImage(
 /** Run a DSM Web API call with SynoToken via curl. DSM gates mutating
  *  endpoints (Image.upload, Project.{stop,start,build}) on the CSRF token
  *  even when the SID is valid; without it you get a misleading code 119
- *  "SID not found". curl is also easier than coercing a fresh DsmClient to
+ *  "SID not found". curl is also easier than coercing a fresh SynoClient to
  *  thread the token through. */
 async function dsmCallWithToken<T = any>(
   cfg: Config,
@@ -310,7 +310,7 @@ export async function deploy(cfg: Config, args: DeployArgs): Promise<DeployResul
   // Login as the deploy user (defaults to claude-mcp; overridable via env).
   // We carry SID + SynoToken explicitly through the rest of the flow — every
   // mutating Docker.* endpoint requires the CSRF token, and threading it via
-  // DsmClient would mean a bigger change for a one-shot path.
+  // SynoClient would mean a bigger change for a one-shot path.
   const auth = await loginForDeploy(cfg);
   log(`logged in as ${auth.user}`);
 

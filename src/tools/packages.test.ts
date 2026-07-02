@@ -1,6 +1,6 @@
 /**
  * Regression tests for the fresh-install flow. Drives nasPackageInstall against
- * a fake DsmClient (every tool routes all DSM I/O through dsm.call, so one
+ * a fake SynoClient (every tool routes all DSM I/O through dsm.call, so one
  * stubbed method covers the whole flow) — no live NAS, deterministic, fast.
  *
  * These pin the bug fixed alongside them: the old single-call install only
@@ -15,8 +15,13 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtempSync } from "node:fs";
 import type { Config } from "../config.js";
-import type { DsmClient, DsmCallOptions } from "../dsm.js";
-import { nasPackageInstall, nasPackageUninstall } from "./packages.js";
+import type { SynoClient, DsmCallOptions } from "../dsm.js";
+import {
+  nasPackageInstall,
+  nasPackageUninstall,
+  nasPackageInfo,
+  nasPackagesCheckUpdates,
+} from "./packages.js";
 
 // Force the audit write to a throwaway local file (never the remote POST).
 delete process.env.MCP_AUDIT_URL;
@@ -24,10 +29,30 @@ const cfg = {
   auditLogDir: mkdtempSync(path.join(os.tmpdir(), "synmcp-test-")),
 } as unknown as Config;
 
+// Field names mirror the real HAR-verified SYNO.Core.Package.Server.list
+// shape: display name is `dname` (not `name`), publisher is `maintainer`
+// (not `publisher`), description is `desc` (not `description`), and
+// dependencies are `deppkgs` (not `depend_packages`).
 const CATALOG = [
-  { id: "TextEditor", name: "Text Editor", version: "1.0.0-1000", link: "http://x/te.spk", md5: "t", size: 1000, source: "syno", beta: false, install_type: "", install_on_cold_storage: false },
-  { id: "UniversalViewer", name: "Universal Viewer", version: "1.4.0-0712", link: "http://x/uv.spk", md5: "u", size: 16069888, source: "syno", beta: false, install_type: "", install_on_cold_storage: true },
-  { id: "SynologyDrive", name: "Synology Drive Server", version: "4.0.3-27892", link: "http://x/sd.spk", md5: "s", size: 37974657, source: "syno", beta: false, install_type: "", install_on_cold_storage: true },
+  { id: "TextEditor", dname: "Text Editor", version: "1.0.0-1000", link: "http://x/te.spk", md5: "t", size: 1000, source: "syno", beta: false, install_type: "", install_on_cold_storage: false },
+  { id: "UniversalViewer", dname: "Universal Viewer", version: "1.4.0-0712", link: "http://x/uv.spk", md5: "u", size: 16069888, source: "syno", beta: false, install_type: "", install_on_cold_storage: true },
+  { id: "SynologyDrive", dname: "Synology Drive Server", version: "4.0.3-27892", link: "http://x/sd.spk", md5: "s", size: 37974657, source: "syno", beta: false, install_type: "", install_on_cold_storage: true },
+  {
+    id: "Tailscale",
+    dname: "Tailscale",
+    version: "1.58.2-700058002",
+    link: "http://x/ts.spk",
+    md5: "z",
+    size: 26220613,
+    source: "syno",
+    beta: false,
+    install_type: "",
+    install_on_cold_storage: false,
+    maintainer: "Tailscale, Inc.",
+    desc: "Connect all your devices using WireGuard, without the hassle.",
+    changelog: "",
+    deppkgs: null,
+  },
 ];
 
 interface Recorded {
@@ -44,7 +69,7 @@ function makeFake(queue: Array<{ pkg: string }>) {
   let pendingId = "";
   const pkgObj = (id: string) => {
     const c = CATALOG.find((x) => x.id === id)!;
-    return { id, name: c.name, version: c.version, additional: { status: "running", install_type: "", startable: true } };
+    return { id, name: c.dname, version: c.version, additional: { status: "running", install_type: "", startable: true } };
   };
   const call = async (opts: DsmCallOptions): Promise<unknown> => {
     const params = (opts.params ?? {}) as Record<string, unknown>;
@@ -77,7 +102,7 @@ function makeFake(queue: Array<{ pkg: string }>) {
         throw new Error(`unexpected DSM call: ${opts.api}.${opts.method}`);
     }
   };
-  return { dsm: { call } as unknown as DsmClient, calls, installed };
+  return { dsm: { call } as unknown as SynoClient, calls, installed };
 }
 
 const commits = (calls: Recorded[]) =>
@@ -156,7 +181,7 @@ function makeUninstallFake(pkg: { id: string; version: string; status: string; i
         throw new Error(`unexpected DSM call: ${opts.api}.${opts.method}`);
     }
   };
-  return { dsm: { call } as unknown as DsmClient, calls, isPresent: () => present };
+  return { dsm: { call } as unknown as SynoClient, calls, isPresent: () => present };
 }
 
 const uninstallCalls = (calls: Recorded[]) =>
@@ -198,4 +223,117 @@ test("no-data package: uninstalls directly without gating", { timeout: 3000 }, a
   assert.equal(res.removed, true);
   assert.equal(res.had_data_dialog, false);
   assert.equal(isPresent(), false);
+});
+
+// ── Catalog field mapping (regression: DSM names these dname/maintainer/desc/
+// deppkgs, not name/publisher/description/depend_packages — a live smoke test
+// against production caught nas_package_info silently dropping these fields) ─
+
+function makeCatalogFake() {
+  const call = async (opts: DsmCallOptions): Promise<unknown> => {
+    if (opts.api === "SYNO.Core.Package.Server" && opts.method === "list") {
+      return { packages: CATALOG };
+    }
+    if (opts.api === "SYNO.Core.Package" && opts.method === "list") {
+      return { packages: [{ id: "Tailscale", version: "1.58.2-700058000" }] };
+    }
+    throw new Error(`unexpected DSM call: ${opts.api}.${opts.method}`);
+  };
+  return { call } as unknown as SynoClient;
+}
+
+test("nas_package_info: surfaces name/publisher/description/dependencies from the real dname/maintainer/desc/deppkgs fields", async () => {
+  const dsm = makeCatalogFake();
+  const res = (await nasPackageInfo(dsm, { name: "Tailscale" })) as any;
+  assert.equal(res.name, "Tailscale");
+  assert.equal(res.publisher, "Tailscale, Inc.");
+  assert.equal(res.description, "Connect all your devices using WireGuard, without the hassle.");
+  assert.equal(res.dependencies, null);
+});
+
+test("nas_package_info: matches by display name (dname), not just id", async () => {
+  const dsm = makeCatalogFake();
+  const res = (await nasPackageInfo(dsm, { name: "Universal Viewer" })) as any;
+  assert.equal(res.id, "UniversalViewer");
+});
+
+test("nas_packages_check_updates: pending entries carry the real display name", async () => {
+  const dsm = makeCatalogFake();
+  const res = await nasPackagesCheckUpdates(dsm);
+  assert.deepEqual(res.pending, [
+    { id: "Tailscale", name: "Tailscale", installed_version: "1.58.2-700058000", available_version: "1.58.2-700058002", changelog: "", beta: false },
+  ]);
+});
+
+// Regression: a catalog row can lack `dname` (optional field). Both read paths
+// must fall back to the id, not emit `name: undefined` — the digest coerces a
+// missing name to the literal string "undefined" for the consumer otherwise.
+function makeNamelessCatalogFake() {
+  const call = async (opts: DsmCallOptions): Promise<unknown> => {
+    if (opts.api === "SYNO.Core.Package.Server" && opts.method === "list") {
+      // No `dname` on this row.
+      return { packages: [{ id: "MariaDB10", version: "10.11.6-1405" }] };
+    }
+    if (opts.api === "SYNO.Core.Package" && opts.method === "list") {
+      return { packages: [{ id: "MariaDB10", version: "10.11.6-1400" }] };
+    }
+    throw new Error(`unexpected DSM call: ${opts.api}.${opts.method}`);
+  };
+  return { call } as unknown as SynoClient;
+}
+
+test("nas_packages_check_updates: dname-less row falls back to id, never undefined", async () => {
+  const res = await nasPackagesCheckUpdates(makeNamelessCatalogFake());
+  assert.equal(res.pending.length, 1);
+  assert.equal(res.pending[0].name, "MariaDB10");
+});
+
+test("nas_package_info: dname-less row falls back to id, never undefined", async () => {
+  const res = (await nasPackageInfo(makeNamelessCatalogFake(), { name: "MariaDB10" })) as any;
+  assert.equal(res.name, "MariaDB10");
+});
+
+// Regression (T2): dsm.ts bounds every call with a 30s AbortSignal.timeout, whose
+// rejection is a TimeoutError — its message matches none of the network patterns.
+// A slow-but-successful commit must still degrade to the Package.list poll, not
+// hard-fail. The fake marks the package installed (server-side success) and THEN
+// throws a TimeoutError from the commit, exactly as an aborted-yet-completed call.
+test("install: a TimeoutError mid-commit degrades to the version-flip poll", { timeout: 3000 }, async () => {
+  const installed = new Set<string>();
+  let pendingId = "";
+  const call = async (opts: DsmCallOptions): Promise<unknown> => {
+    switch (`${opts.api}.${opts.method}`) {
+      case "SYNO.Core.Package.list":
+        return { packages: [...installed].map((id) => ({ id, name: id, version: "1.0.0-1000", additional: { status: "running" } })) };
+      case "SYNO.Core.Package.Server.list":
+        return { packages: CATALOG };
+      case "SYNO.Core.Package.feasibility_check":
+        return {};
+      case "SYNO.Core.Package.Installation.get_queue":
+        return { queue: [{ pkg: "TextEditor" }], broken_pkgs: [], conflicted_pkgs: [], non_exist_pkgs: [], paused_pkgs: [] };
+      case "SYNO.Core.Package.Installation.check":
+        return { volume_list: [{ mount_point: "/volume1" }] };
+      case "SYNO.Core.Package.Installation.install":
+        if ((opts.params ?? {}).installrunpackage !== undefined) {
+          installed.add(pendingId); // server-side commit succeeds...
+          const e = new Error("The operation was aborted due to timeout");
+          e.name = "TimeoutError"; // ...but the client's 30s bound aborts first
+          throw e;
+        }
+        pendingId = JSON.parse(String((opts.params ?? {}).name));
+        return { taskid: `@SYNOPKG_DOWNLOAD_${pendingId}` };
+      case "SYNO.Core.Package.Installation.status":
+        return { finished: true, success: true, status: "installing" };
+      case "SYNO.Core.Package.Installation.Download.check":
+        return { filename: `/volume1/@tmp/synopkg/download/${pendingId}` };
+      case "SYNO.Core.Package.Installation.delete":
+        return {};
+      default:
+        throw new Error(`unexpected DSM call: ${opts.api}.${opts.method}`);
+    }
+  };
+  const dsm = { call } as unknown as SynoClient;
+  const res = (await nasPackageInstall(cfg, dsm, { name: "TextEditor" })) as any;
+  assert.equal(res.verified, true);
+  assert.equal(res.after.version, "1.0.0-1000");
 });

@@ -12,7 +12,7 @@ DSM error codes are NOT what they sound like — verified against [N4S4/synology
 | 103 | Method not found | API exists; method doesn't. Often a renamed method (`list` → `load`, etc.) |
 | 105 | Insufficient permissions | Even admin users hit this on some endpoints (e.g. `Notification.Rule.list`) |
 | 114 | **"Lost parameters"** — missing a required param (NOT "API key mismatch") |
-| 117 / 119 | SID expired — `DsmClient.call()` auto-retries with fresh login |
+| 117 / 119 | SID expired — `SynoClient.call()` auto-retries with fresh login |
 | 120 | Invalid `additional[]` key — DSM rejects unknown field names |
 | 5100 | "Unable to perform" — generic internal failure (NOT "no records to return") |
 | 5102 | Invalid enum value (e.g. `type=blocked` rejected; valid values are `allow`/`deny`) |
@@ -35,6 +35,18 @@ The biggest footgun: where `additional[]` keys appear in the response varies by 
 | `SYNO.Core.Package.list` | Nested under `additional`: `p.additional.status`, `p.additional.install_type` |
 
 Always probe with `DEBUG_DSM_RESPONSES=1` and look at the raw shape before mapping fields.
+
+**`SYNO.Core.Package.Server.list` (the catalog, not the installed-package list) uses its own field
+names, not the ones you'd guess from `Package.list` or the Package Center UI's labels:** display
+name is `dname` (not `name`), publisher is `maintainer` (not `publisher`), description is `desc`
+(not `description`), and dependencies are `deppkgs` (a `{pkgId: versionConstraint}` map or `null`
+— not `depend_packages`). There is no `install_dep_packages` field on this endpoint at all;
+`Installation.get_queue` is the resolved-plan source of truth (see the write-flow section in
+CLAUDE.md). `nas_package_info` and `nas_packages_check_updates` shipped for a while silently
+mapping the wrong keys — `JSON.stringify` drops `undefined` fields, so the gap only surfaced via a
+live smoke test, not a type error (`dsm.call<T>()` performs an unchecked cast, so a wrong field
+name in the TS interface never fails at compile time). `changelog`, `size`, and `beta` happen to be
+named the same on both endpoints, which is what let the bug hide for the fields that did work.
 
 ## API name + method discoveries
 
